@@ -48,46 +48,9 @@ strix-guard is the control layer for the defender's side of this asymmetry. It i
 
 ### Architecture
 
-```mermaid
-flowchart TB
-  Strix["Strix<br/>CLI and agents"]
+![strix-guard architecture: host pipeline and sandbox HTTP path](docs/assets/architecture.svg)
 
-  subgraph Host["Host: strix-guard"]
-    direction TB
-    Proxy["Docker API proxy"]
-    Ledger["Ledger"]
-    Rules["Deterministic policy"]
-    Decision["JEV + Policy Engine"]
-    Adj["Adjudicator"]
-    Audit["Audit"]
-    Proxy -->|exec create| Ledger
-    Ledger --> Rules
-    Rules -->|pass| Decision
-    Decision -->|non-ALLOW / gray| Adj
-    Adj --> Audit
-  end
-
-  Daemon["Docker daemon"]
-
-  subgraph Sandbox["Sandbox container"]
-    direction LR
-    Agent["Tool exec"]
-    Sidecar["HTTP sidecar<br/>127.0.0.1:48081"]
-    Caido["Caido<br/>127.0.0.1:48080"]
-    Agent -->|http_proxy| Sidecar
-    Sidecar --> Caido
-  end
-
-  Models["Model providers"]
-  Target["Target"]
-
-  Strix -->|DOCKER_HOST| Proxy
-  Proxy -->|create / start / exec| Daemon
-  Daemon -->|starts| Agent
-  Caido --> Target
-  Adj --> Models
-  Sidecar -->|JSONL log| Audit
-```
+The diagram shows the two trust boundaries. The host pipeline handles command policy and model review. The sandbox sidecar handles HTTP method and host enforcement. The table below maps each box to its code.
 
 | Layer | Runs in | Responsibility | Code |
 |---|---|---|---|

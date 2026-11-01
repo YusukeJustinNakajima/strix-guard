@@ -48,46 +48,9 @@ strix-guard は、この非対称性の中で防御側が使うための制御�
 
 ### アーキテクチャ
 
-```mermaid
-flowchart TB
-  Strix["Strix<br/>CLI とエージェント"]
+![strix-guard のアーキテクチャ: ホスト側の判定パイプラインとサンドボックス内のHTTP経路](docs/assets/architecture.ja.svg)
 
-  subgraph Host["ホスト: strix-guard"]
-    direction TB
-    Proxy["Docker API プロキシ"]
-    Ledger["台帳"]
-    Rules["決定論的ポリシー"]
-    Decision["JEV + Policy Engine"]
-    Adj["裁定モデル"]
-    Audit["監査"]
-    Proxy -->|exec 作成| Ledger
-    Ledger --> Rules
-    Rules -->|通過| Decision
-    Decision -->|非 ALLOW / グレーゾーン| Adj
-    Adj --> Audit
-  end
-
-  Daemon["Docker デーモン"]
-
-  subgraph Sandbox["サンドボックスコンテナ"]
-    direction LR
-    Agent["ツール実行"]
-    Sidecar["HTTP サイドカー<br/>127.0.0.1:48081"]
-    Caido["Caido<br/>127.0.0.1:48080"]
-    Agent -->|http_proxy| Sidecar
-    Sidecar --> Caido
-  end
-
-  Models["モデルプロバイダ"]
-  Target["対象"]
-
-  Strix -->|DOCKER_HOST| Proxy
-  Proxy -->|作成 / 起動 / exec| Daemon
-  Daemon -->|起動| Agent
-  Caido --> Target
-  Adj --> Models
-  Sidecar -->|JSONL ログ| Audit
-```
+図は二つの信頼境界を示しています。ホスト側のパイプラインがコマンドのポリシーとモデル裁定を担当し、サンドボックス内のサイドカーがHTTPメソッドとホストの制限を担当します。各箱とコードの対応は下の表にあります。
 
 | 層 | 動作する場所 | 役割 | コード |
 |---|---|---|---|
