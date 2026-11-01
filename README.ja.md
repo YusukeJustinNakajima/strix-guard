@@ -6,6 +6,21 @@ strix-guard は、Strix の実行を変えずに、コマンドと HTTP リク�
 
 > 許可されたテストにだけ使ってください。対象の範囲と権限は利用者が管理します。
 
+## 目次
+
+- [課題](#課題)
+- [解決策](#解決策)
+  - [アーキテクチャ](#アーキテクチャ)
+- [実際にどう制御するのか](#実際にどう制御するのか)
+  - [exec ゲート](#1-exec-ゲート)
+  - [決定論的ポリシー](#2-決定論的ポリシー)
+  - [リスク評価と強モデル](#3-リスク評価と強モデル)
+  - [HTTP サイドカー](#4-http-サイドカー)
+- [使い方](#使い方)
+- [テスト](#テスト)
+- [対象と制限](#対象と制限)
+- [ドキュメント](#ドキュメント)
+
 ## 課題
 
 攻撃者は、AI エージェントを使ってアプリケーションの脆弱性を探すようになっています。同じツールと同じモデルを対象へ向け、破壊的な試行も含めて試せます。失敗しても、対象を壊しても、攻撃者の側に大きなコストはかかりません。
@@ -31,24 +46,62 @@ strix-guard は、この非対称性の中で防御側が使うための制御�
 1. **Docker API プロキシ**。ランチャーがローカルプロキシを起動し、Strix プロセスの `DOCKER_HOST` をそこへ向けます。コンテナの作成、起動、exec はすべてプロキシを通ります。プロキシはコマンドを読み、ポリシーを確認し、そのまま転送するか、通知に差し替えます。差し替えたとき、元のコマンドは実行されません。
 2. **コンテナ内 HTTP サイドカー**。`reference_only` と `recon` では、サンドボックスの中で小さなプロキシを起動します。コンテナの `http_proxy` はこのサイドカーを指し、サイドカーは Strix が使う Caido プロキシへ転送します。コマンド検査では見えない、実行時に組み立てられたメソッドもここで止まります。
 
-制御の流れ:
+### アーキテクチャ
 
-```text
-Strix
-  │ DOCKER_HOST
-  ▼
-strix-guard Docker プロキシ ──────────▶ Docker デーモン
-  │
-  ├─ 台帳: apply_patch / heredoc / cp / mv → スクリプト全文
-  ├─ 決定論的ポリシー: メソッド、アップロード、SQL 書き込み、外部通信、ツール
-  ├─ JEV リスク評価: typesafe/jev-1.14
-  ├─ Policy Engine: しきい値 → ALLOW / REVISE / HOLD / BLOCK / NEED_INFO
-  ├─ 強モデル: gpt-6-sol → gemini-3.8-flash → claude-opus-4.6
-  └─ 監査: verdicts.jsonl / policy.json / http-*.jsonl
+```mermaid
+flowchart TB
+  Strix["Strix<br/>CLI とエージェント"]
 
-サンドボックス
-  http_proxy :48081 ─▶ HTTP サイドカー ─▶ Caido :48080 ─▶ 対象
+  subgraph Host["ホスト: strix-guard"]
+    direction TB
+    Proxy["Docker API プロキシ"]
+    Ledger["台帳"]
+    Rules["決定論的ポリシー"]
+    Decision["JEV + Policy Engine"]
+    Adj["裁定モデル"]
+    Audit["監査"]
+    Proxy -->|exec 作成| Ledger
+    Ledger --> Rules
+    Rules -->|通過| Decision
+    Decision -->|非 ALLOW / グレーゾーン| Adj
+    Adj --> Audit
+  end
+
+  Daemon["Docker デーモン"]
+
+  subgraph Sandbox["サンドボックスコンテナ"]
+    direction LR
+    Agent["ツール実行"]
+    Sidecar["HTTP サイドカー<br/>127.0.0.1:48081"]
+    Caido["Caido<br/>127.0.0.1:48080"]
+    Agent -->|http_proxy| Sidecar
+    Sidecar --> Caido
+  end
+
+  Models["モデルプロバイダ"]
+  Target["対象"]
+
+  Strix -->|DOCKER_HOST| Proxy
+  Proxy -->|作成 / 起動 / exec| Daemon
+  Daemon -->|起動| Agent
+  Caido --> Target
+  Adj --> Models
+  Sidecar -->|JSONL ログ| Audit
 ```
+
+| 層 | 動作する場所 | 役割 | コード |
+|---|---|---|---|
+| ランチャー | ホスト | ポリシー解決、セットアップ、環境変数、UI、監査 | `strix_guard/launcher.py` |
+| Docker API プロキシ | ホスト | コンテナ作成・起動・exec のフック、通知への差し替え | `strix_guard/docker_proxy.py` |
+| 台帳 | ホスト | `apply_patch`、heredoc、`cp`、`mv` からスクリプトを復元 | `strix_guard/ledger.py` |
+| 決定論的ポリシー | ホスト | メソッド、アップロード、SQL 書き込み、外部通信、ツールの検査 | `strix_guard/policy_guard.py`、`strix_guard/policy_config.py` |
+| Decision service | ホスト | JEV のリスク評価と Policy Engine の判定 | `strix_guard/decision.py`、`strix_guard/policy.py` |
+| 裁定モデル | ホスト | 非 ALLOW とグレーゾーンの再審査、フォールバック | `strix_guard/adjudicator.py` |
+| サイドカーマネージャ | ホスト | サイドカーの準備、env と bind の注入、起動 | `strix_guard/sidecar_manager.py` |
+| HTTP サイドカー | サンドボックス | メソッド、ホスト、回数、レート、並列の制限、JSONL ログ | `strix_guard/http_sidecar.py` |
+| 監査 | ホスト | 判定、ポリシースナップショット、サイドカーログ | `strix_guard/audit.py` |
+
+ガードはホストで動き、Docker ソケットを使います。HTTP サイドカーはサンドボックスの中で動きます。サイドカーのポリシーファイルは読み取り専用でマウントし、ログはホスト側のディレクトリへ書きます。モデルの呼び出しは、設定したプロバイダへ出ます。Strix 本体は変更しません。
 
 ハードポリシーの確認は、モデルを呼ぶ前に済ませます。モデルは曖昧な判断と、エージェントへの修正指示を担当します。モデルだけに実行の可否を任せません。
 
@@ -65,6 +118,43 @@ strix-guard Docker プロキシ ──────────▶ Docker デー�
   ```
   元のコマンドは実行されません。
 - **拒否**。同じ差し替えで、遮断の理由を返します。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Strix エージェント
+  participant P as Docker プロキシ
+  participant R as 決定論的ポリシー
+  participant D as Decision service
+  participant M as 裁定モデル
+  participant X as Docker デーモン
+
+  A->>P: exec 作成
+  P->>R: コマンドとスクリプト全文
+  alt ポリシー違反
+    R-->>P: 遮断
+    P->>X: 通知用 exec
+    X-->>A: 終了コード 1 と理由
+  else ポリシー通過
+    P->>D: リスクと判定
+    alt ALLOW（band 未満）
+      D-->>P: ALLOW
+      P->>X: 元の exec
+      X-->>A: 出力
+    else 非 ALLOW またはグレーゾーン
+      D-->>P: 判定 / band の該当
+      P->>M: 裁定
+      M-->>P: allow / revise / deny
+      alt allow
+        P->>X: 元の exec
+        X-->>A: 出力
+      else revise または deny
+        P->>X: 通知用 exec
+        X-->>A: 終了コード 1 と指示
+      end
+    end
+  end
+```
 
 Strix の PTY ラッパーがあるときは、そのラッパーを残して通知を差し込みます。これで、Strix が出力を拾える場面では、エージェントが通知を読めます。Strix が非 TTY の exec で空の出力を返す場合でも、終了コード 1 は伝わります。本文は監査ログに残ります。
 
@@ -100,6 +190,18 @@ openai/gpt-6-sol → google/gemini-3.8-flash → anthropic/claude-opus-4.6
 
 フォールバックが必要なのは、プロバイダがセキュリティ関連の内容を拒否する場合があるからです。最初のモデルが `cyber_policy` で拒否したら、次のモデルが同じ内容を審査します。すべて失敗したら、コマンドは拒否されます。グレーゾーンの再審査が失敗した場合は、ポリシーがすでに ALLOW を出しているので実行し、エラーを監査に残します。
 
+| 状況 | 判定 | 強モデル | 実行 |
+|---|---|---|---|
+| 決定論的ポリシー違反 | `BLOCK`（`policy_rule`） | 呼ばない | しない |
+| ハードブロック | `BLOCK` | 再審査は任意。ダウングレード不可 | しない |
+| ソフトブロック | `BLOCK` | 再審査。確信度 0.8 以上で allow / revise | 場合による |
+| `REVISE` / `HOLD` / `NEED_INFO` | 非 ALLOW | 裁定 | allow / revise / deny |
+| `ALLOW` で `review_band` 以上 | `ALLOW` | グレーゾーン再審査 | allow / revise / deny |
+| `ALLOW` で band 未満 | `ALLOW` | 呼ばない | する |
+| JEV の失敗 | ヒューリスティック | 上と同じ | 上と同じ |
+| すべての裁定モデルが失敗 | 非 ALLOW | 失敗 | しない |
+| グレーゾーン再審査が失敗 | `ALLOW` | 失敗 | する。記録を残す |
+
 ### 4. HTTP サイドカー
 
 exec の検査では、実行時に組み立てられたメソッドを見つけられません。たとえば、次のコマンドです。
@@ -118,6 +220,36 @@ python3 -c "import requests; m='PO'+'ST'; requests.request(m, 'http://host.docke
 - JSONL のアクセスログを、ホストにマウントしたディレクトリへ書く
 
 `NO_PROXY` には `localhost`、`127.0.0.1`、`api.caido.io` を入れています。Strix 自身のプロキシやテレメトリが、サイドカーへ戻らないようにするためです。
+
+```mermaid
+flowchart LR
+  Tool["curl / Python / スキャナ"] -->|HTTP_PROXY 127.0.0.1:48081| Sidecar["HTTP サイドカー"]
+  Sidecar -->|許可したメソッドとホスト| Caido["Caido 127.0.0.1:48080"]
+  Caido --> Target["スコープ内の対象"]
+  Sidecar -->|拒否| Reply["403 を返す"]
+  Sidecar -->|JSONL| Log["ホスト側のログ"]
+  Bypass["http_proxy を無視するツール / 生ソケット"] -.->|対象外| Target
+```
+
+サイドカーが制御できるのは、プロキシの環境変数に従う通信だけです。環境変数を無視するツールや生のソケットは迂回できます。参照のみを確実に守るなら、読み取り専用の資格情報か、対象側のネットワーク制御を使ってください。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as Strix
+  participant P as Docker プロキシ
+  participant D as Docker デーモン
+  participant C as サンドボックスコンテナ
+
+  S->>P: コンテナ作成
+  P->>D: env 48081 とマウントを付けて作成
+  S->>P: コンテナ起動
+  P->>D: 起動
+  P->>D: http_sidecar を exec
+  D-->>C: 48081 で待ち受け
+  P->>P: ready ファイルを待つ
+  P-->>S: 起動応答
+```
 
 `reference_only` では HTTPS の CONNECT を既定で拒否します。CONNECT のトンネルの中はメソッドが見えないからです。この制限を受け入れる場合だけ、`"allow_connect": true` にしてください。
 

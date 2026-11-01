@@ -6,6 +6,21 @@ strix-guard is a non-invasive policy and safety layer for [Strix](https://strix.
 
 > Use this only for authorized security testing. You are responsible for scope, permission, and the impact of the scan.
 
+## Contents
+
+- [Problem](#problem)
+- [Solution](#solution)
+  - [Architecture](#architecture)
+- [How it enforces control](#how-it-enforces-control)
+  - [Exec gate](#1-exec-gate)
+  - [Deterministic policy](#2-deterministic-policy)
+  - [Risk assessment and the strong model](#3-risk-assessment-and-the-strong-model)
+  - [HTTP sidecar](#4-http-sidecar)
+- [Usage](#usage)
+- [Tests](#tests)
+- [Scope and limitations](#scope-and-limitations)
+- [Documentation](#documentation)
+
 ## Problem
 
 Attackers increasingly use AI agents to find application vulnerabilities. They can point the same tools and models at a target and let the agent try destructive paths. A failed attempt, or a damaged target, costs them little.
@@ -31,24 +46,62 @@ strix-guard is the control layer for the defender's side of this asymmetry. It i
 1. **Docker API proxy.** The launcher starts a local proxy and sets `DOCKER_HOST` for the Strix process. Every container create, start, and exec call passes through it. The proxy reads the command, checks the policy, and either forwards the command or replaces it with a notice. The original command is never executed.
 2. **In-container HTTP sidecar.** For `reference_only` and `recon`, the guard starts a small proxy inside the sandbox. The container's `http_proxy` points to the sidecar, and the sidecar chains to Strix's existing Caido proxy. It enforces allowed methods, hosts, request counts, and rates even when the command uses an obfuscated method that the exec check cannot see.
 
-Control flow:
+### Architecture
 
-```text
-Strix
-  │ DOCKER_HOST
-  ▼
-strix-guard Docker proxy ──────────────▶ Docker daemon
-  │
-  ├─ ledger: apply_patch / heredoc / cp / mv → full script text
-  ├─ deterministic policy: methods, uploads, SQL writes, egress, tools
-  ├─ JEV risk: typesafe/jev-1.14
-  ├─ Policy Engine: thresholds → ALLOW / REVISE / HOLD / BLOCK / NEED_INFO
-  ├─ strong model: gpt-6-sol → gemini-3.8-flash → claude-opus-4.6
-  └─ audit: verdicts.jsonl / policy.json / http-*.jsonl
+```mermaid
+flowchart TB
+  Strix["Strix<br/>CLI and agents"]
 
-Sandbox
-  http_proxy :48081 ─▶ HTTP sidecar ─▶ Caido :48080 ─▶ target
+  subgraph Host["Host: strix-guard"]
+    direction TB
+    Proxy["Docker API proxy"]
+    Ledger["Ledger"]
+    Rules["Deterministic policy"]
+    Decision["JEV + Policy Engine"]
+    Adj["Adjudicator"]
+    Audit["Audit"]
+    Proxy -->|exec create| Ledger
+    Ledger --> Rules
+    Rules -->|pass| Decision
+    Decision -->|non-ALLOW / gray| Adj
+    Adj --> Audit
+  end
+
+  Daemon["Docker daemon"]
+
+  subgraph Sandbox["Sandbox container"]
+    direction LR
+    Agent["Tool exec"]
+    Sidecar["HTTP sidecar<br/>127.0.0.1:48081"]
+    Caido["Caido<br/>127.0.0.1:48080"]
+    Agent -->|http_proxy| Sidecar
+    Sidecar --> Caido
+  end
+
+  Models["Model providers"]
+  Target["Target"]
+
+  Strix -->|DOCKER_HOST| Proxy
+  Proxy -->|create / start / exec| Daemon
+  Daemon -->|starts| Agent
+  Caido --> Target
+  Adj --> Models
+  Sidecar -->|JSONL log| Audit
 ```
+
+| Layer | Runs in | Responsibility | Code |
+|---|---|---|---|
+| Launcher | Host | policy resolution, setup, environment, UI, audit | `strix_guard/launcher.py` |
+| Docker API proxy | Host | container create/start/exec hooks, notice rewrite | `strix_guard/docker_proxy.py` |
+| Ledger | Host | rebuild scripts from `apply_patch`, heredoc, `cp`, `mv` | `strix_guard/ledger.py` |
+| Deterministic policy | Host | method, upload, SQL write, egress, tool rules | `strix_guard/policy_guard.py`, `strix_guard/policy_config.py` |
+| Decision service | Host | JEV risk and Policy Engine verdict | `strix_guard/decision.py`, `strix_guard/policy.py` |
+| Adjudicator | Host | non-ALLOW and gray-zone review, fallback chain | `strix_guard/adjudicator.py` |
+| Sidecar manager | Host | prepare sidecar, inject env/binds, start it | `strix_guard/sidecar_manager.py` |
+| HTTP sidecar | Sandbox | method, host, request, rate, and parallel limits; JSONL log | `strix_guard/http_sidecar.py` |
+| Audit | Host | verdicts, policy snapshot, sidecar logs | `strix_guard/audit.py` |
+
+The guard runs on the host and talks to the Docker socket. The HTTP sidecar runs inside the sandbox; its policy file is mounted read-only and its log is written to a host-mounted directory. Model calls leave the host to the configured provider. Strix itself is not modified.
 
 All hard policy checks run before the models. The models handle ambiguity and write instructions for the agent; they are not the enforcement mechanism.
 
@@ -65,6 +118,43 @@ The proxy sees `POST /containers/{id}/exec` and calls the decision pipeline. Thr
   ```
   The original command never runs.
 - **Deny.** Same rewrite, with a hard block message.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Strix agent
+  participant P as Docker proxy
+  participant R as Deterministic policy
+  participant D as Decision service
+  participant M as Strong model
+  participant X as Docker daemon
+
+  A->>P: exec create
+  P->>R: command + full script
+  alt policy violation
+    R-->>P: block
+    P->>X: notice exec
+    X-->>A: exit 1 + reason
+  else policy pass
+    P->>D: risk + verdict
+    alt ALLOW below band
+      D-->>P: ALLOW
+      P->>X: original exec
+      X-->>A: output
+    else non-ALLOW or gray zone
+      D-->>P: verdict / band hits
+      P->>M: adjudicate
+      M-->>P: allow / revise / deny
+      alt allow
+        P->>X: original exec
+        X-->>A: output
+      else revise or deny
+        P->>X: notice exec
+        X-->>A: exit 1 + instruction
+      end
+    end
+  end
+```
 
 The rewrite preserves Strix's PTY wrapper when it is present, so the notice can reach the agent through the normal tool output. If Strix itself returns an empty output for a non-TTY session, the agent still sees exit code 1; the text remains in the audit log.
 
@@ -100,6 +190,18 @@ openai/gpt-6-sol → google/gemini-3.8-flash → anthropic/claude-opus-4.6
 
 The fallback matters because providers can refuse security content. If the primary returns a `cyber_policy` refusal, the next model reviews the same payload. If every model fails, the command is denied. A gray-zone review that fails is allowed, because the policy already returned ALLOW, and the error is recorded.
 
+| Situation | Verdict | Strong model | Executed |
+|---|---|---|---|
+| Deterministic policy violation | `BLOCK` (`policy_rule`) | no | no |
+| Hard block | `BLOCK` | optional review, no downgrade | no |
+| Soft block | `BLOCK` | review; allow/revise at confidence ≥ 0.8 | maybe |
+| `REVISE` / `HOLD` / `NEED_INFO` | non-ALLOW | adjudicate | allow/revise/deny |
+| `ALLOW` above `review_band` | `ALLOW` | gray-zone review | allow/revise/deny |
+| `ALLOW` below band | `ALLOW` | no | yes |
+| JEV failure | heuristic risk | as above | as above |
+| All adjudicators fail | non-ALLOW | failed | no |
+| Gray review fails | `ALLOW` | failed | yes, logged |
+
 ### 4. HTTP sidecar
 
 The exec check cannot see a method built at runtime, for example:
@@ -118,6 +220,36 @@ For `reference_only` and `recon`, the guard starts `http_sidecar.py` inside each
 - writes a JSONL access log to a host-mounted directory
 
 `NO_PROXY` includes `localhost`, `127.0.0.1`, and `api.caido.io`, so Strix's own proxy and telemetry do not loop back through the sidecar.
+
+```mermaid
+flowchart LR
+  Tool["curl / Python / scanner"] -->|HTTP_PROXY 127.0.0.1:48081| Sidecar["HTTP sidecar"]
+  Sidecar -->|allowed method and host| Caido["Caido 127.0.0.1:48080"]
+  Caido --> Target["In-scope target"]
+  Sidecar -->|blocked| Reply["403 to agent"]
+  Sidecar -->|JSONL| Log["Host-mounted log"]
+  Bypass["Tool ignoring http_proxy / raw socket"] -.->|not covered| Target
+```
+
+The sidecar covers traffic that honors the proxy environment. Tools that ignore it, and raw sockets, can bypass it. For a hard read-only guarantee, use read-only credentials or network egress rules at the target.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as Strix
+  participant P as Docker proxy
+  participant D as Docker daemon
+  participant C as Sandbox container
+
+  S->>P: create container
+  P->>D: create with env 48081 and mounts
+  S->>P: start container
+  P->>D: start
+  P->>D: exec http_sidecar
+  D-->>C: sidecar listens on 48081
+  P->>P: wait for ready file
+  P-->>S: start response
+```
 
 HTTPS CONNECT is blocked by default for `reference_only`. A CONNECT tunnel hides the method from the sidecar. Set `"allow_connect": true` only when you accept that limitation.
 
