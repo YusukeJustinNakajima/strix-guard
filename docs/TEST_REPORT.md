@@ -48,13 +48,13 @@ E2E は、ローカルの脆弱性検証アプリ `http://host.docker.internal:5
 | FR-09 スナップショット | `test_policy_config`、E2E | `policy.json` と SHA-256 を確認 |
 | FR-10 JEV | `test_accounts_context`、E2E | 次元評価とコンテキストを確認 |
 | FR-11 Policy Engine | `test_policy` | しきい値と 4 値写像 |
-| FR-12 強モデル裁定 | `test_adjudicator`、E2E | revise / allow / deny を確認 |
+| FR-12 裁定モデル（上位LLM） | `test_adjudicator`、E2E | revise / allow / deny を確認 |
 | FR-13 プロバイダ拒否 | `test_adjudicator`、実 API の拒否テスト | 403 `cyber_policy` を検知 |
 | FR-14 フォールバック | `test_adjudicator`、実 API | gpt-6-sol 拒否後に Gemini が allow |
 | FR-15 グレーゾーン | `test_policy_config`、E2E `run-20261101-133508` | 51 ALLOW 中 2 件を再審査 |
 | FR-16 失敗の記録 | `test_adjudicator`、E2E | モデル、コスト、エラーを保存 |
 | FR-17 ハードブロック | `test_policy`、E2E `run-20261031-222938` | 3 件を遮断、ダウングレードなし |
-| FR-18 HTTP サイドカー | `test_http_sidecar`、`test_sidecar_manager`、E2E | 起動、env 注入、チェーンを確認 |
+| FR-18 HTTP サイドカー | `test_http_sidecar`、`test_sidecar_manager`、E2E | 起動、env 注入、中継を確認 |
 | FR-19 HTTP 許可条件 | `test_http_sidecar` | メソッド、ホスト、回数、レート、並列 |
 | FR-20 実行時メソッド | E2E `run-20261101-145329` | `method_not_allowed` で遮断 |
 | FR-21 インフラ分離 | `test_policy_guard`、`test_http_sidecar` | 48080 と `api.caido.io` を除外 |
@@ -75,7 +75,7 @@ E2E は、ローカルの脆弱性検証アプリ `http://host.docker.internal:5
 - 裁定: 6 回、$0.0276。すべて revise
 - 検出: 19 件（Critical 6、High 5、Medium 8）
 - LLM コスト: $0.632、463 リクエスト
-- 修正指示の到達: 6 件中 4 件がツール出力に本文ごと出現。残り 2 件は非 TTY で出力が空だった
+- 修正指示の伝達: 6 件中 4 件でツール出力（標準出力）に指示本文が正しく表示されました。残る 2 件は非 TTY 実行だったため出力が空となりました。
 
 ### 4.2 既定の deep（`run-20261031-222938` / `host-docker-internal-5000_613d`）
 
@@ -84,10 +84,10 @@ E2E は、ローカルの脆弱性検証アプリ `http://host.docker.internal:5
 - 裁定: 9 回、$0.0292。revise 5、allow 1、失敗 3
 - 検出: 17 件（Critical 5、High 4、Medium 8）
 - LLM コスト: $0.874、557 リクエスト、約 24 分
-- 修正指示の到達: 5 件すべて本文ごと出現
-- 失敗 3 件は、mass-assignment PoC に対するプロバイダの `cyber_policy` 拒否
-- ハードブロック 3 件は `irreversible_destruction`
-- 台帳: スクリプト解決 18 件。`cp` のコピー先も解決できることを確認
+- 修正指示の伝達: 5 件すべてでツール出力に指示本文が表示されました。
+- 裁定失敗の 3 件は、mass-assignment PoC に対する AI プロバイダの `cyber_policy` 違反判定によるものです。
+- ハードブロック 3 件の要因は不可逆な破壊操作（`irreversible_destruction`）の検知です。
+- スクリプト台帳: 計 18 件のスクリプト実行を解決し、`cp` コマンドによるコピー先スクリプトも正しく解決できることを確認しました。
 
 ### 4.3 グレーゾーン（`run-20261101-133508` / `host-docker-internal-5000_8acb`）
 
@@ -100,8 +100,7 @@ E2E は、ローカルの脆弱性検証アプリ `http://host.docker.internal:5
 
 - 条件: `reference_only`、`quick`、4 ターン
 - exec 評価: 9 件（ALLOW 8、BLOCK 1）
-- `curl -X POST` を `policy_http_method` で遮断
-- 監査の `source` が `policy_rule` になることを確認
+- `curl -X POST` が `policy_http_method` 規則により遮断され、監査ログの `source` が `policy_rule` として記録されることを確認しました。
 
 ### 4.5 HTTP サイドカー（`run-20261101-145329` / `host-docker-internal-5000_2b36`）
 
@@ -113,7 +112,7 @@ E2E は、ローカルの脆弱性検証アプリ `http://host.docker.internal:5
 - exec 層: ALLOW（`policy_rule` は出ない）
 - HTTP サイドカー: `POST /login` を `method_not_allowed` で拒否
 - サイドカーのログを `guard_runs/run-20261101-145329/http-*.jsonl` へコピー
-- GET は exec 層で許可された。別の短い run では `curl` の GET が終了コード 0 で完了したが、サイドカーのログには残らなかった。curl が環境変数以外の経路（ログインシェルの設定など）で Caido へ直接向かった可能性がある。GET の転送自体は `test_http_sidecar` で確認している
+- GET は exec 層で許可された。別の短い run では `curl` の GET が終了コード 0 で完了したが、サイドカーのログには残らなかった。curl が環境変数以外の経路（ログインシェルの設定など）で Caido へ直接向かった可能性があります。GET の転送自体は `test_http_sidecar` で確認しています
 
 ### 4.6 ゲート検証（`tools/verify_gate.py`）
 
@@ -132,24 +131,24 @@ E2E は、ローカルの脆弱性検証アプリ `http://host.docker.internal:5
 ### 4.7 フォールバック（実 API）
 
 - 対象: mass-assignment PoC のスクリプト
-- 結果: `openai/gpt-6-sol` は 403 `cyber_policy` で拒否。`google/gemini-3.8-flash` が `allow` を返した
+- 結果: `openai/gpt-6-sol` は 403 `cyber_policy` で拒否されましたが、フォールバック先の `google/gemini-3.8-flash` が正常に `allow` を返しました。
 - 制約: `max_parallel=1`、`max_requests=10`
 - コスト: $0.0038
 
-## 5. 既知の失敗と制約
+## 5. 既知の失敗と制約事項
 
-| 事象 | 原因 | 対応 |
+| 事象 | 原因 | 対応方針 |
 |---|---|---|
-| 非 TTY の exec で通知本文が空になる | Strix の exec ツールが非 TTY の出力を返さないことがある。許可した GET でも発生 | 終了コード 1 と監査ログで確認する。TTY 指定時は本文が届く |
-| mass-assignment PoC の裁定が 3 回失敗 | プロバイダの `cyber_policy` 拒否 | フォールバックを追加済み。すべて拒否された場合は exec を拒否 |
-| CONNECT の中のメソッドが見えない | TLS トンネル | `reference_only` は CONNECT を既定で拒否。必要なら `allow_connect` を true にする |
-| サイドカーを迂回できる | `http_proxy` を無視するツール、生のソケット、直接通信 | 参照のみを確実にするなら、読み取り専用の資格情報か対象側のネットワーク制御を使う |
-| `--target-list` のホストがサイドカーの許可リストにない | サイドカーは CLI の URL と `egress.allowed_hosts` からホストを決める | ポリシーファイルの `egress.allowed_hosts` に追加する |
-| サイドカーの GET ログが残らないことがある | `curl` などがログインシェルの設定や別の経路で Caido へ直接向かう可能性がある | サイドカーの転送は `test_http_sidecar` で確認する。実運用ではプロキシ環境の統一を確認する |
+| 非 TTY exec で通知本文が空になる | Strix 本体の仕様により、非 TTY 実行時に標準出力を返さないケースがある（許可された GET でも発生） | コマンドの成否は終了コード 1 と監査ログで確認する（TTY 指定時は本文が正しく届く） |
+| mass-assignment PoC の裁定が 3 回失敗 | AI プロバイダ側の `cyber_policy` 違反判定 | フォールバックモデルの多段構成により対応（全滅時は安全側に倒して exec を拒否） |
+| CONNECT トンネル内部のメソッドが見えない | 暗号化された TLS トンネル通信のため | `reference_only` では CONNECT を既定で拒否。必要な場合のみ `allow_connect` を true に設定する |
+| サイドカーが迂回される可能性 | `http_proxy` 環境変数を無視するツールや生ソケット通信 | 参照限定を確実に担保する場合、読み取り専用資格情報を用いるかターゲット側のネットワーク制御を利用する |
+| `--target-list` のホストがサイドカー許可リストに含まれない | サイドカーは CLI の対象 URL と `egress.allowed_hosts` から許可ホストを解決する仕様 | ポリシーファイルの `egress.allowed_hosts` に追加ホストを明記する |
+| サイドカーの GET ログが記録されないケースがある | `curl` 等がログインシェル設定や別経路で Caido へ直接通信した可能性 | サイドカーの転送機能自体は `test_http_sidecar` で実証済み。実運用時はプロキシ環境変数の一貫性を確認する |
 
-## 6. 未カバー
+## 6. 未カバーのテスト項目
 
-- `replay` の自動テストはありません。手動での動作確認のみです。
-- tmux ポップアップの自動テストはありません。Web と CLI の承認経路で代替しています。
-- HTTPS の TLS 傍受は実装していません。CONNECT の許可・拒否だけをテストしています。
-- 複数コンテナを同時に走らせる場合のサイドカーポート競合は、コンテナごとに独立した 127.0.0.1 なので発生しませんが、E2E では 1 コンテナのみ確認しています。
+- `replay` コマンドの自動テストは未実装です（手動での動作確認を実施済み）。
+- tmux ポップアップ承認の自動テストは未実装です（Web UI および CLI の承認経路テストで代替）。
+- HTTPS 通信の TLS 傍受・復号テストは未実装です（CONNECT の許可・拒否の判定のみをテスト済み）。
+- 複数コンテナを同時に実行する場合のサイドカーポート競合は、コンテナごとに独立した `127.0.0.1` 空間のため発生しませんが、E2E テストでは 1 コンテナ構成のみ確認しています。
