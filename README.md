@@ -8,18 +8,25 @@ strix-guard is a non-invasive policy and safety layer for [Strix](https://strix.
 
 ## Problem
 
-Strix is useful because the agent decides what to run. That same freedom creates four problems for real engagements.
+Attackers increasingly use AI agents to find application vulnerabilities. They can point the same tools and models at a target and let the agent try destructive paths. A failed attempt, or a damaged target, costs them little.
 
-- A model can miss a dangerous command, or a `POST`/`PUT` hidden inside a script.
-- A blocked command needs a reason the agent can read. Without one, the agent retries or guesses.
-- Engagement rules such as "read-only", "test accounts only", and request limits usually live in a prompt, not in code.
-- After a run, it is hard to prove which commands were blocked and which requests reached the target.
+Defenders need the same attacker's-eye view. They need to use the same tools and models, find what an external attacker would find, fix it by risk, and release. As models improve, the set of findable issues changes, so the work continues after every release and every model upgrade.
 
-Prompt instructions cannot enforce these rules. A model can follow them most of the time, but it cannot guarantee that a mutating request never leaves the sandbox.
+The two sides are not symmetric. An attacker can drop a table, overwrite a file, or lock an account and treat the damage as part of the test. A defender cannot. The test has to stay non-destructive: read-only where possible, writes limited to test data and accounts, request volume bounded, and state restored. The defender also has to prove the agent stayed inside those limits.
+
+That is not something a prompt can guarantee. The agent chooses the next command, and the model can miss a destructive path or a mutating HTTP method hidden in a script. A blocked command needs a reason the agent can act on. After the run, the team needs evidence of what was attempted, what was blocked, and what reached the target.
+
+Examples of the asymmetry:
+
+- An attacker can run `DROP TABLE` or delete an admin account to prove impact. A defender needs the same proof but cannot leave the data destroyed. The test has to use a disposable record and restore it, or stop at a read-only proof.
+- An attacker can send 100,000 login attempts. A defender needs to know whether rate limiting works, but must stop at a bounded number and avoid locking out real users.
+- An attacker can upload a webshell. A defender needs to test upload handling without executing a payload or leaving a file behind.
+- An attacker can point the agent at any third-party host. A defender must keep the agent inside the declared scope and show that it stayed there.
+- An attacker can adopt a new model as soon as it ships. A defender needs to re-run the same checks after each model upgrade, with the same policy and a reproducible record.
 
 ## Solution
 
-strix-guard inserts two enforcement points without touching Strix.
+strix-guard is the control layer for the defender's side of this asymmetry. It inserts two enforcement points without touching Strix.
 
 1. **Docker API proxy.** The launcher starts a local proxy and sets `DOCKER_HOST` for the Strix process. Every container create, start, and exec call passes through it. The proxy reads the command, checks the policy, and either forwards the command or replaces it with a notice. The original command is never executed.
 2. **In-container HTTP sidecar.** For `reference_only` and `recon`, the guard starts a small proxy inside the sandbox. The container's `http_proxy` points to the sidecar, and the sidecar chains to Strix's existing Caido proxy. It enforces allowed methods, hosts, request counts, and rates even when the command uses an obfuscated method that the exec check cannot see.
