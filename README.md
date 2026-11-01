@@ -2,7 +2,7 @@
 
 **English** | [日本語](README.ja.md)
 
-strix-guard is a non-invasive policy and safety layer for [Strix](https://strix.ai). It gates every `exec_command` before the command reaches the sandbox, sends ambiguous cases to a strong model, and can enforce HTTP methods and request limits from inside the sandbox. It does not modify Strix, its prompts, or its sandbox image.
+[Strix](https://strix.ai) is an autonomous penetration-testing agent. It is used in real offensive operations, not only in lab exercises. strix-guard is a non-invasive policy and safety layer for Strix. It gates every `exec_command` before the command reaches the sandbox, sends ambiguous cases to a strong model, and can enforce HTTP methods and request limits from inside the sandbox. It does not modify Strix, its prompts, or its sandbox image.
 
 > Use this only for authorized security testing. You are responsible for scope, permission, and the impact of the scan.
 
