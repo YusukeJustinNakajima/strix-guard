@@ -14,11 +14,18 @@ from .policy import ui_label
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("cmds_jsonl")
-    ap.add_argument("--limit", type=int, default=20)
-    ap.add_argument("--offline", action="store_true", help="JEVを使わずヒューリスティックのみ")
-    ap.add_argument("--runs-root", default="/home/yusuk/blackbox-testing/strix_runs")
+    ap = argparse.ArgumentParser(
+        description="Re-run recorded exec_command entries through the decision pipeline "
+                    "and print each verdict with its risk dimensions.")
+    ap.add_argument("cmds_jsonl",
+                    help="JSONL file with one {\"run_id\": ..., \"cmd\": ...} per line")
+    ap.add_argument("--limit", type=int, default=20,
+                    help="maximum number of commands to evaluate (default: %(default)s)")
+    ap.add_argument("--offline", action="store_true",
+                    help="skip JEV and use only the deterministic/heuristic scoring")
+    ap.add_argument("--runs-root", default="/home/yusuk/blackbox-testing/strix_runs",
+                    help="root directory holding Strix run state used to rebuild the "
+                         "script ledger (default: %(default)s)")
     args = ap.parse_args(argv)
 
     svc = DecisionService(use_jev=not args.offline, summarize=False)

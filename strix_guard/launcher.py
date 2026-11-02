@@ -150,45 +150,122 @@ class LedgerCache:
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--runs-dir", default="./strix_runs")
-    ap.add_argument("--audit-dir", default=os.path.expanduser("~/blackbox-testing/strix_guard/guard_runs"))
-    ap.add_argument("--dry-run", action="store_true", help="strixを起動せずproxyだけ起動")
-    ap.add_argument("--ui", choices=["auto", "cli", "tmux", "web", "noninteractive"], default="auto")
-    ap.add_argument("--on-ask", choices=["deny", "allow"], default="deny")
-    ap.add_argument("--strict", action="store_true", help="しきい値を下げてaskを出やすくする（デモ用）")
-    ap.add_argument("--no-jev", action="store_true")
-    ap.add_argument("--approval-timeout", type=float, default=180.0,
-                    help="承認待ちのタイムアウト秒（超えたら自動拒否）")
-    ap.add_argument("--auto-allow-revised", action="store_true",
-                    help="修正後の同系統コマンドを自動許可（既定: 修正後も人間が確認）")
-    ap.add_argument("--adjudicator", choices=["off", "advisory", "hybrid", "auto"], default="off",
-                    help="非ALLOWの裁定: off=人間 / advisory=提案のみ / hybrid=低リスクは自動 / auto=全自動")
-    ap.add_argument("--adjudicator-model", default="openai/gpt-6-sol")
-    ap.add_argument("--adjudicator-fallback-models",
-                    default="google/gemini-3.8-flash,anthropic/claude-opus-4.6",
-                    help="カンマ区切りのフォールバックモデル（provider拒否・失敗時に順に試す）")
-    ap.add_argument("--adjudicator-max-calls", type=int, default=200)
-    ap.add_argument("--adjudicator-max-cost", type=float, default=3.0)
-    ap.add_argument("--policy", default=None, help="JSONポリシーファイル（プリセットに上書き）")
-    ap.add_argument("--policy-preset", choices=["full", "reference_only", "recon"], default=None,
-                    help="テスト方針プリセット（既定: full）")
-    ap.add_argument("--no-gray-review", action="store_true",
-                    help="ALLOWでもreview_band以上のリスクを強モデルに再審査しない")
-    ap.add_argument("--no-http-enforce", action="store_true",
-                    help="ポリシーがhttp.enforceでもコンテナ内HTTPプロキシを起動しない")
-    ap.add_argument("--adjudicator-review-blocks", action="store_true",
-                    help="BLOCKも強モデルに再審査させ理由を監査に残す（soft blockはダウングレード可）")
-    ap.add_argument("--pii-policy", choices=["test_data_ok", "strict"], default="test_data_ok",
-                    help="benchmarkではシード/テストアカウントのデータを機微扱いしない（既定）")
-    ap.add_argument("--setup", action="store_true", help="起動時に設定ウィザードを表示")
-    ap.add_argument("--no-setup", action="store_true", help="ウィザードを表示しない")
-    ap.add_argument("--language", choices=["en", "ja"], default="en")
-    ap.add_argument("--environment", choices=["benchmark", "staging", "production"], default="benchmark")
-    ap.add_argument("--test-accounts", default=os.environ.get("STRIX_GUARD_TEST_ACCOUNTS", ""),
-                    help="読み取り/変更を許可するテストアカウント（カンマ区切り）")
-    ap.add_argument("--no-wrap", action="store_true", help="tmux自動ラップを無効化（内部用）")
-    ap.add_argument("strix_args", nargs=argparse.REMAINDER)
+    epilog = """\
+Every exec is checked before it runs. Destructive, out-of-scope, or otherwise
+dangerous commands are blocked or rewritten with a notice in every mode;
+presets only set the starting allowances (methods, uploads, SQL writes,
+egress, and the HTTP sidecar).
+
+presets (choose with --policy-preset):
+  full            default. Allows GET/HEAD/OPTIONS/POST/PUT/PATCH/DELETE,
+                  uploads, SQL writes, and external egress.
+  reference_only  read-only. Only GET/HEAD/OPTIONS; no uploads, SQL writes,
+                  or external egress. Enables the in-sandbox HTTP sidecar.
+  recon           same restrictions as reference_only, with lower rate limits
+                  and no exploitation tools. Enables the HTTP sidecar.
+
+Policy lookup order:
+  --policy > STRIX_GUARD_POLICY > ./guard_policy.json >
+  ~/.config/strix-guard/policy.json > --policy-preset
+
+Arguments after '--' are passed to Strix unchanged, for example:
+  python3 -m strix_guard.launcher --policy-preset reference_only -- \\
+    --target http://host.docker.internal:5000 --non-interactive -m quick
+"""
+    ap = argparse.ArgumentParser(
+        description="Run Strix behind the strix-guard Docker API proxy. "
+                    "Policy checks and adjudication run on the host; Strix is not modified.",
+        epilog=epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    g_run = ap.add_argument_group("run and audit")
+    g_run.add_argument("--runs-dir", default="./strix_runs",
+                       help="directory for Strix run state (default: %(default)s)")
+    g_run.add_argument("--audit-dir",
+                       default=os.path.expanduser("~/blackbox-testing/strix_guard/guard_runs"),
+                       help="parent directory for guard_runs/run-<timestamp> "
+                            "(default: %(default)s)")
+    g_run.add_argument("--dry-run", action="store_true",
+                       help="start the Docker proxy and policy pipeline without launching Strix")
+    g_run.add_argument("--no-wrap", action="store_true",
+                       help="do not re-exec inside tmux for the TTY UI (internal)")
+
+    g_pol = ap.add_argument_group("policy")
+    g_pol.add_argument("--policy-preset", choices=["full", "reference_only", "recon"],
+                       default=None,
+                       help="testing stance preset (default: full; see presets below)")
+    g_pol.add_argument("--policy", default=None,
+                       help="JSON policy file that overrides the preset (highest priority)")
+    g_pol.add_argument("--no-http-enforce", action="store_true",
+                       help="do not start the in-container HTTP sidecar even if the policy enables it")
+    g_pol.add_argument("--environment",
+                       choices=["benchmark", "staging", "production"],
+                       default="benchmark",
+                       help="environment profile for PII defaults and threshold scaling "
+                            "(default: %(default)s)")
+    g_pol.add_argument("--pii-policy", choices=["test_data_ok", "strict"],
+                       default="test_data_ok",
+                       help="test_data_ok caps data-exposure risk for test accounts; "
+                            "strict keeps full PII risk (default: %(default)s)")
+    g_pol.add_argument("--test-accounts",
+                       default=os.environ.get("STRIX_GUARD_TEST_ACCOUNTS", ""),
+                       help="comma-separated accounts the agent may read or write; "
+                            "passed to JEV and the adjudicator")
+
+    g_adj = ap.add_argument_group("adjudicator (strong model)")
+    g_adj.add_argument("--adjudicator", choices=["off", "advisory", "hybrid", "auto"],
+                       default="off",
+                       help="off: ask a human; advisory: suggest only; "
+                            "hybrid: auto-apply at confidence >= 0.7; "
+                            "auto: apply every decision (default: %(default)s)")
+    g_adj.add_argument("--adjudicator-model", default="openai/gpt-6-sol",
+                       help="primary model for non-ALLOW and gray-zone review "
+                            "(default: %(default)s)")
+    g_adj.add_argument("--adjudicator-fallback-models",
+                       default="google/gemini-3.8-flash,anthropic/claude-opus-4.6",
+                       help="comma-separated models tried in order when the provider "
+                            "refuses or the call fails")
+    g_adj.add_argument("--adjudicator-max-calls", type=int, default=200,
+                       help="cap on adjudicator calls per run (default: %(default)s)")
+    g_adj.add_argument("--adjudicator-max-cost", type=float, default=3.0,
+                       help="cap on adjudicator spend in USD per run (default: %(default)s)")
+    g_adj.add_argument("--adjudicator-review-blocks", action="store_true",
+                       help="record a second opinion for BLOCKs; hard blocks are never downgraded")
+    g_adj.add_argument("--no-gray-review", action="store_true",
+                       help="do not send ALLOW commands that reach review_band to the adjudicator")
+    g_adj.add_argument("--no-jev", action="store_true",
+                       help="skip JEV and use only deterministic/heuristic risk scoring")
+
+    g_ui = ap.add_argument_group("approval UI")
+    g_ui.add_argument("--ui", choices=["auto", "cli", "tmux", "web", "noninteractive"],
+                      default="auto",
+                      help="approval interface: auto uses the tmux popup on a TTY, "
+                           "else web/CLI, and noninteractive when stdin is not a TTY "
+                           "(default: %(default)s)")
+    g_ui.add_argument("--on-ask", choices=["deny", "allow"], default="deny",
+                      help="noninteractive answer when the pipeline asks for a human "
+                           "(default: %(default)s)")
+    g_ui.add_argument("--approval-timeout", type=float, default=180.0,
+                      help="seconds to wait for an approval before denying "
+                           "(default: %(default)s)")
+    g_ui.add_argument("--auto-allow-revised", action="store_true",
+                      help="auto-allow retries of a revised command family inside the "
+                           "granted envelope")
+    g_ui.add_argument("--strict", action="store_true",
+                      help="lower thresholds to make asks more likely (demo)")
+
+    g_setup = ap.add_argument_group("setup and language")
+    g_setup.add_argument("--setup", action="store_true",
+                         help="run the interactive setup wizard before starting "
+                              "(wizard answers override the flags)")
+    g_setup.add_argument("--no-setup", action="store_true",
+                         help="never show the setup wizard")
+    g_setup.add_argument("--language", choices=["en", "ja"], default="en",
+                         help="UI and summary language (default: %(default)s)")
+
+    ap.add_argument("strix_args", nargs=argparse.REMAINDER,
+                    help="Strix arguments after '--' (e.g. --target URL --non-interactive); "
+                         "see 'strix --help' for the full list")
     args = ap.parse_args(argv)
 
     # 端末UI（TUI）と承認プロンプトの衝突を避けるため、tmux内で自分自身を再実行する

@@ -82,9 +82,13 @@ def read_container_file(addr, api, cid, path):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--image", default="alpine:latest")
-    ap.add_argument("--keep", action="store_true")
+    ap = argparse.ArgumentParser(
+        description="Verify that blocked/revised commands never reach an access-log "
+                    "target, using the real DockerProxy enforcement path.")
+    ap.add_argument("--image", default="alpine:latest",
+                    help="container image used for the probe sandbox (default: %(default)s)")
+    ap.add_argument("--keep", action="store_true",
+                    help="keep the probe container instead of deleting it at the end")
     args = ap.parse_args()
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

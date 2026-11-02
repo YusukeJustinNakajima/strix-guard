@@ -9,6 +9,7 @@
 ## Contents
 
 - [Problem](#problem)
+  - [What historical runs show](#what-historical-runs-show)
 - [Solution](#solution)
   - [Architecture](#architecture)
 - [How it enforces control](#how-it-enforces-control)
@@ -17,6 +18,8 @@
   - [Risk assessment and the strong model](#3-risk-assessment-and-the-strong-model)
   - [HTTP sidecar](#4-http-sidecar)
 - [Usage](#usage)
+  - [Launcher options](#launcher-options)
+  - [Policy presets](#policy-presets)
 - [Tests](#tests)
 - [Scope and limitations](#scope-and-limitations)
 - [Documentation](#documentation)
@@ -39,12 +42,23 @@ Examples of the asymmetry:
 - An attacker can point the agent at any third-party host. A defender must keep the agent inside the declared scope and show that it stayed there.
 - An attacker can adopt a new model as soon as it ships. A defender needs to re-run the same checks after each model upgrade, with the same policy and a reproducible record.
 
+### What historical runs show
+
+The asymmetry is not hypothetical. We re-scored every exec attempt from 136 earlier Strix benchmark runs (39,830 commands, with script contents rebuilt from the ledger) using JEV. Those runs had no guard in place, so the commands below ran:
+
+- **2,740 commands (6.9%)** crossed the danger thresholds: 1,965 exposed data, 433 were destructive, 417 imposed high load, 10 attacked third parties, and 1 left the declared scope (categories can overlap).
+- That is an average of **20.1 dangerous commands per run** (median 16); runs with 200+ commands averaged **26.1**.
+- **1,062** of the dangerous commands were only visible after the ledger rebuilt the script hidden inside a PTY file-transfer wrapper (token theft, bulk signup, and similar payloads).
+- With the guard in place the picture changes: across 29 guarded runs, 115 dangerous attempts were logged; the guard blocked or revised 81, and 34 ran because the selected policy permitted them. `reference_only` stops those before execution.
+
+Left alone, the agent routinely reads other users' data and pushes load at the target. That is why enforcement has to live outside the model, in the exec gate and the HTTP sidecar. The method and full breakdown are in the [JEV corpus report](docs/JEV_CORPUS_REPORT.md).
+
 ## Solution
 
 strix-guard is the control layer for the defender's side of this asymmetry. It inserts two enforcement points without touching Strix.
 
 1. **Docker API proxy.** The launcher starts a local proxy and sets `DOCKER_HOST` for the Strix process. Every container create, start, and exec call passes through it. The proxy reads the command, checks the policy, and either forwards the command or replaces it with a notice. The original command is never executed.
-2. **In-container HTTP sidecar.** For `reference_only` and `recon`, the guard starts a small proxy inside the sandbox. The container's `http_proxy` points to the sidecar, and the sidecar chains to Strix's existing Caido proxy. It enforces allowed methods, hosts, request counts, and rates even when the command uses an obfuscated method that the exec check cannot see.
+2. **In-container HTTP sidecar.** For the read-only presets (`reference_only` and `recon`; details in [Policy presets](#policy-presets)), the guard starts a small proxy inside the sandbox. The container's `http_proxy` points to the sidecar, and the sidecar chains to Strix's existing Caido proxy. It enforces allowed methods, hosts, request counts, and rates even when the command uses an obfuscated method that the exec check cannot see.
 
 ### Architecture
 
@@ -136,6 +150,8 @@ It blocks or holds:
 Strix's own proxy (`127.0.0.1:48080`) is in `egress.infra_hosts`. Commands that only touch that host are treated as infrastructure and are not subject to the target method policy.
 
 ### 3. Risk assessment and the strong model
+
+JEV is a fast, very cheap decision model from Typesafe. It scores a command on a fixed set of risk dimensions, so strix-guard can run it on every exec without a noticeable delay or cost, and the expensive adjudicator is reserved for non-ALLOW and gray-zone cases. A JEV decision costs roughly $0.00002–0.00005, so the check fits into the normal agent loop without hurting the testing experience. See [Introducing System One models and JEV](https://typesafe.ai/blog/introducing-system-one-models-and-jev) (the post calls this class of models "System One").
 
 JEV returns five risk dimensions: destructiveness, load, data exposure, scope violation, and third-party impact, plus a sufficiency answer. The Policy Engine applies thresholds and produces the verdict.
 
@@ -249,6 +265,54 @@ There is no package to install. Run from the project root:
 cd strix_guard
 python3 -m unittest discover -s tests
 ```
+
+### Launcher options
+
+Run `python3 -m strix_guard.launcher --help` for the same list. Strix's own flags go after `--` and are passed through unchanged (`strix --help` lists them).
+
+| Category | Option | Default | Description |
+|---|---|---|---|
+| Run | `--runs-dir DIR` | `./strix_runs` | Where Strix keeps per-run state (the ledger reads it) |
+| Run | `--audit-dir DIR` | `~/blackbox-testing/strix_guard/guard_runs` | Parent directory for `run-<timestamp>/` audit folders |
+| Run | `--dry-run` | off | Start the Docker proxy and policy pipeline without launching Strix |
+| Policy | `--policy-preset NAME` | `full` | Testing stance: `full`, `reference_only`, or `recon` (see [Policy presets](#policy-presets)) |
+| Policy | `--policy FILE` | none | JSON policy file; overrides the preset (highest priority) |
+| Policy | `--no-http-enforce` | off | Keep the exec rules but do not start the in-container HTTP sidecar |
+| Policy | `--environment NAME` | `benchmark` | Environment profile for PII defaults and threshold scaling |
+| Policy | `--pii-policy NAME` | `test_data_ok` | `test_data_ok` caps test-account data risk; `strict` keeps full PII risk |
+| Policy | `--test-accounts LIST` | empty (or `STRIX_GUARD_TEST_ACCOUNTS`) | Comma-separated accounts the agent may read or write |
+| Adjudicator | `--adjudicator MODE` | `off` | `off` asks a human, `advisory` suggests, `hybrid` applies at confidence ≥ 0.7, `auto` applies every decision |
+| Adjudicator | `--adjudicator-model NAME` | `openai/gpt-6-sol` | Primary model for non-ALLOW and gray-zone review |
+| Adjudicator | `--adjudicator-fallback-models LIST` | `google/gemini-3.8-flash,anthropic/claude-opus-4.6` | Models tried in order when the provider refuses or the call fails |
+| Adjudicator | `--adjudicator-max-calls N` | `200` | Cap on adjudicator calls per run |
+| Adjudicator | `--adjudicator-max-cost USD` | `3.0` | Cap on adjudicator spend per run |
+| Adjudicator | `--adjudicator-review-blocks` | off | Record a second opinion for `BLOCK`s; hard blocks are never downgraded |
+| Adjudicator | `--no-gray-review` | off | Disable the advisory review of `ALLOW` commands above `review_band` |
+| Adjudicator | `--no-jev` | off | Skip JEV and use only deterministic/heuristic risk scoring |
+| Approval UI | `--ui MODE` | `auto` | `auto` uses the tmux popup on a TTY, else web/CLI, and noninteractive when stdin is not a TTY; also `cli`, `tmux`, `web`, `noninteractive` |
+| Approval UI | `--on-ask ACTION` | `deny` | Noninteractive answer when the pipeline asks for a human (`deny` or `allow`) |
+| Approval UI | `--approval-timeout SEC` | `180` | Seconds to wait for an approval before denying |
+| Approval UI | `--auto-allow-revised` | off | Auto-allow retries of a revised command family inside the granted envelope |
+| Approval UI | `--strict` | off | Lower thresholds to make asks more likely (demo) |
+| Setup | `--setup` | off | Run the interactive setup wizard first; its answers override the flags |
+| Setup | `--no-setup` | off | Never show the setup wizard |
+| Setup | `--language LANG` | `en` | UI and summary language (`en` or `ja`) |
+| Passthrough | `-- <strix args>` | — | Everything after `--` is passed to Strix unchanged |
+| Internal | `--no-wrap` | off | Do not re-exec inside tmux for the TTY UI |
+
+Policy file lookup order: `--policy` → `STRIX_GUARD_POLICY` → `./guard_policy.json` → `~/.config/strix-guard/policy.json` → `--policy-preset`.
+
+### Policy presets
+
+The guard blocks or rewrites dangerous commands in every mode: the exec gate, deterministic rules, JEV, adjudicator, and audit all run regardless of the preset. A preset only sets the starting allowances, so pick the least permissive one that still lets the test proceed.
+
+| Preset | HTTP methods allowed | Uploads / SQL writes / external egress | In-sandbox HTTP sidecar | Use when |
+|---|---|---|---|---|
+| `full` (default) | `GET` `HEAD` `OPTIONS` `POST` `PUT` `PATCH` `DELETE` | allowed | no | disposable lab, or staging where writes are permitted |
+| `reference_only` | `GET` `HEAD` `OPTIONS` | blocked | yes | read-only proof against production-like data |
+| `recon` | `GET` `HEAD` `OPTIONS` (lower rate limits, no exploitation tools) | blocked | yes | first-pass inventory of a live system |
+
+The preset is the last entry in the [policy lookup order](#custom-policy-file): an explicit `--policy` file, `STRIX_GUARD_POLICY`, `./guard_policy.json`, or the user config always wins. The gray-zone `review_band` default is `0.30` for `full` and `0.25` for `reference_only` and `recon`.
 
 ### Quick start: setup wizard
 
@@ -373,11 +437,39 @@ Set a band per dimension in the policy file. A value of `0` disables that dimens
 
 ### Test accounts and PII
 
+`--test-accounts` tells the guard which accounts belong to the test. The list is passed to JEV state and to the adjudicator context, so the models know which reads and writes are authorized instead of mistaking them for another user's data.
+
 ```bash
---test-accounts "alice,bob" --pii-policy test_data_ok
+# Benchmark lab: alice and bob are the only accounts the agent may use
+python3 -m strix_guard.launcher \
+  --environment benchmark --pii-policy test_data_ok \
+  --test-accounts "alice,bob" \
+  --adjudicator auto \
+  -- --target http://host.docker.internal:5000 --non-interactive -m quick
+
+# Staging with strict PII scoring and a single QA account
+python3 -m strix_guard.launcher \
+  --environment staging --pii-policy strict \
+  --test-accounts "qa-user@example.com" \
+  --adjudicator hybrid \
+  -- --target https://staging.example.com --non-interactive
 ```
 
-`benchmark` with `test_data_ok` treats seed and agent-created accounts as test data and caps the data-exposure risk. `strict` keeps the normal PII policy for staging and production.
+Accounts can be usernames, numeric IDs, or emails. The same value can come from `STRIX_GUARD_TEST_ACCOUNTS`; `--test-accounts` overrides the policy file. To keep the list with the rest of the policy:
+
+```json
+{
+  "preset": "reference_only",
+  "data": {
+    "allowed_test_accounts": ["alice", "bob"],
+    "allow_other_accounts": false,
+    "allow_writes": false,
+    "restore_after_write": true
+  }
+}
+```
+
+The accounts do not widen the preset by themselves. `data.allow_other_accounts` tells JEV and the adjudicator whether data outside the list is allowed, `data.allow_writes` controls SQL writes, and `data.restore_after_write` records that the test restores what it changes. `test_data_ok` only lowers the data-exposure score (capped at 0.4) for the `benchmark` profile; `staging` and `production` normally keep `strict`.
 
 ### Approval UIs
 
@@ -410,13 +502,38 @@ python3 -m strix_guard.replay <exec_cmds.jsonl> --limit 20
 
 ### Environment profiles
 
+`--environment` names the run profile and is passed to JEV. The setup wizard asks the same question and uses the chosen profile to fill the adjudication mode, approval timeout, threshold scale, and cost cap. Without the wizard, pass those flags explicitly, as in the examples below.
+
+| Profile | PII policy | Adjudication | Approval timeout | Threshold scale | Cost cap | Wizard preset |
+|---|---|---|---|---|---|---|
+| `benchmark` | `test_data_ok` | `auto` | 180 s | ×1.0 | $3.0 | `full` |
+| `staging` | `strict` | `hybrid` | 120 s | ×0.5 | $1.5 | `full` |
+| `production` | `strict` | `hybrid` | 60 s | ×0.1 | $1.0 | `reference_only` |
+
 ```bash
---environment benchmark   # disposable lab
---environment staging     # staging data
---environment production  # production; policy default is reference_only
+# Disposable lab: full preset, writes allowed, test accounts treated as test data
+python3 -m strix_guard.launcher \
+  --environment benchmark --policy-preset full --pii-policy test_data_ok \
+  --test-accounts "alice,bob" --adjudicator auto \
+  -- --target http://host.docker.internal:5000 --non-interactive -m quick
+
+# Staging: read-only target, stricter thresholds, hybrid adjudication
+python3 -m strix_guard.launcher \
+  --environment staging --policy-preset reference_only --pii-policy strict \
+  --adjudicator hybrid --approval-timeout 120 --adjudicator-max-cost 1.5 \
+  --test-accounts "qa-user@example.com" \
+  -- --target https://staging.example.com --non-interactive
+
+# Production-like: read-only, no human in the loop, deny when asked
+python3 -m strix_guard.launcher \
+  --environment production --policy-preset reference_only --pii-policy strict \
+  --ui noninteractive --on-ask deny \
+  --adjudicator hybrid --approval-timeout 60 --adjudicator-max-cost 1.0 \
+  --test-accounts "qa-user@example.com" \
+  -- --target https://www.example.com --non-interactive
 ```
 
-The profile sets the PII policy, adjudication mode, approval timeout, threshold scale, and cost limit. The setup wizard uses the same profiles.
+With `--setup`, the wizard asks the same items (environment, policy, mode, language, PII, model, timeout, accounts) and applies the answers to the run. For a production read-only run the answers are `production`, `reference_only`, `hybrid`, `en`, `strict`, `openai/gpt-6-sol`, `60`, `qa-user@example.com`.
 
 ### Audit files
 
@@ -468,4 +585,5 @@ Highlights:
 
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — functional and non-functional requirements
 - [docs/TEST_REPORT.md](docs/TEST_REPORT.md) — test matrix, end-to-end runs, known failures
+- [docs/JEV_CORPUS_REPORT.md](docs/JEV_CORPUS_REPORT.md) — JEV re-classification of historical exec commands
 - [DESIGN.md](DESIGN.md) — design notes and background

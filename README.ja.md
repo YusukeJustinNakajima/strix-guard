@@ -9,6 +9,7 @@
 ## 目次
 
 - [課題](#課題)
+  - [過去の実行データ](#過去の実行データ)
 - [解決策](#解決策)
   - [アーキテクチャ](#アーキテクチャ)
 - [実際にどう制御するのか](#実際にどう制御するのか)
@@ -17,6 +18,8 @@
   - [リスク評価と裁定モデル（上位LLM）](#3-リスク評価と裁定モデル上位llm)
   - [HTTP サイドカー](#4-http-サイドカー)
 - [使い方](#使い方)
+  - [起動オプション（launcher）](#起動オプションlauncher)
+  - [ポリシープリセット](#ポリシープリセット)
 - [テスト](#テスト)
 - [対象と制限](#対象と制限)
 - [ドキュメント](#ドキュメント)
@@ -39,12 +42,23 @@
 - **スコープ逸脱**: 攻撃者はエージェントを第三者のホストへ向けることができます。防御側は宣言したテストスコープの外へ一切通信を出さず、かつ逸脱がなかったことを証明する必要があります。
 - **モデル進化への追従**: 攻撃者は新しいモデルが登場すれば即座に実戦投入できます。防御側もモデル更新のたびに同一検査を再実行し、同一ポリシー下での再現可能な記録を蓄積する必要があります。
 
+### 過去の実行データ
+
+この非対称性は仮定ではありません。過去の Strix ベンチマーク実行 136 回・39,830 件の exec を、台帳でスクリプト本文を解決したうえで JEV で再評価しました。これらはガードを介さずに実行されたため、以下に挙げるコマンドは実際に実行されています。
+
+- **2,740 件（6.9%）**が危険なしきい値を超えました。内訳はデータ露出 1,965、破壊的操作 433、高負荷 417、第三者への攻撃 10、スコープ逸脱 1 です（分類は重複します）。
+- 1 実行あたり平均 **20.1 件**（中央値 16 件）。200 件以上の大規模実行では平均 **26.1 件**です。
+- 危険な 2,740 件のうち **1,062 件**は、PTY のファイル転送ラッパーの中に隠れたトークン窃取や大量登録などのスクリプトを台帳が復元して初めて危険と判定できたものです。
+- ガードを適用した 29 回では、危険な試行 115 件のうち 81 件を遮断・修正し、34 件は選択中のポリシー（主に `full`）が許可して実行しました。`reference_only` ではこれらも実行前に止まります。
+
+エージェントは放っておけば他ユーザーのデータを読み、対象に負荷をかけます。だからこそ、モデルの外側にある exec ゲートと HTTP サイドカーで強制する必要があります。方法と内訳は[JEV 再分類レポート](docs/JEV_CORPUS_REPORT.md)を参照してください。
+
 ## 解決策
 
 strix-guard は、この非対称性の中で防御側が安全にペネトレーションテストを実施するための制御層（セーフティゲート）です。Strix 本体を一切変更することなく、2つの制御点を挿入します。
 
 1. **Docker API プロキシ**: ランチャーがローカルプロキシを立ち上げ、Strix プロセスの `DOCKER_HOST` をこのプロキシに向けます。コンテナの作成、起動、exec コールはすべてプロキシを経由します。プロキシは実行コマンドを解析してポリシーを照合し、安全なコマンドはそのまま転送し、ポリシー違反時は警告通知コマンドへと差し替えます。差し替えられた場合、元のコマンドは一切実行されません。
-2. **コンテナ内 HTTP サイドカー**: `reference_only` や `recon` プリセットでは、サンドボックスコンテナ内に軽量プロキシを常駐させます。コンテナの `http_proxy` をこのサイドカーに向け、サイドカーから Strix 既存の Caido プロキシへ中継します。これにより、シェルコマンドの静的検査では検知できない、実行時に動的生成された HTTP メソッドであっても確実に捕捉・遮断できます。
+2. **コンテナ内 HTTP サイドカー**: 参照のみのプリセット（`reference_only` と `recon`。詳細は[ポリシープリセット](#ポリシープリセット)）では、サンドボックスコンテナ内に軽量プロキシを常駐させます。コンテナの `http_proxy` をこのサイドカーに向け、サイドカーから Strix 既存の Caido プロキシへ中継します。これにより、シェルコマンドの静的検査では検知できない、実行時に動的生成された HTTP メソッドであっても確実に捕捉・遮断できます。
 
 ### アーキテクチャ
 
@@ -136,6 +150,8 @@ Strix の PTY ラッパーが存在する場合は、ラッパー構造を維持
 なお、Strix 自身の内部プロキシ（`127.0.0.1:48080`）は `egress.infra_hosts` に登録されています。このホスト宛ての通信のみを行うコマンドはエージェントのインフラ操作とみなされ、テスト対象向けメソッド制限の対象外となります。
 
 ### 3. リスク評価と裁定モデル（上位LLM）
+
+JEV は Typesafe の高速で非常に安価な判定モデルです。コマンドを固定のリスク次元で採点するため、strix-guard は全 exec に組み込んでも待ち時間と費用をほとんど増やさずに検査できます。高価な裁定モデルは非 ALLOW とグレーゾーンだけに温存できます。JEV の判定コストは 1 件あたり約 $0.00002〜$0.00005 で、毎回の検査がテストの体験を損ないません。詳細: [Introducing System One models and JEV](https://typesafe.ai/blog/introducing-system-one-models-and-jev)（リンク先ではこの種のモデルを System One と呼んでいます）。
 
 JEV（判定エンジン）は、破壊性・サーバー負荷・データ露出・スコープ違反・第三者影響という5つのリスク次元と、判断材料の十分性をスコアリングします。これを受け、Policy Engine が設定されたしきい値に基づいて最終判定（ALLOW / REVISE / HOLD / BLOCK / NEED_INFO）を下します。
 
@@ -249,6 +265,54 @@ sequenceDiagram
 cd strix_guard
 python3 -m unittest discover -s tests
 ```
+
+### 起動オプション（launcher）
+
+同じ一覧は `python3 -m strix_guard.launcher --help` でも確認できます。Strix 自身の引数は `--` の後ろに置き、そのまま渡されます（一覧は `strix --help`）。
+
+| 分類 | オプション | 既定値 | 説明 |
+|---|---|---|---|
+| 実行 | `--runs-dir DIR` | `./strix_runs` | Strix の実行状態の保存先（台帳が参照します） |
+| 実行 | `--audit-dir DIR` | `~/blackbox-testing/strix_guard/guard_runs` | `run-<timestamp>/` 監査フォルダの親ディレクトリ |
+| 実行 | `--dry-run` | off | Strix を起動せず、Docker プロキシとポリシー判定だけを動かす |
+| ポリシー | `--policy-preset NAME` | `full` | テスト方針: `full` / `reference_only` / `recon`（[ポリシープリセット](#ポリシープリセット)） |
+| ポリシー | `--policy FILE` | なし | JSON ポリシーファイル。プリセットを上書き（最優先） |
+| ポリシー | `--no-http-enforce` | off | exec のルールは維持し、コンテナ内 HTTP サイドカーは起動しない |
+| ポリシー | `--environment NAME` | `benchmark` | PII 既定値としきい値倍率を決める環境プロファイル |
+| ポリシー | `--pii-policy NAME` | `test_data_ok` | `test_data_ok` はテストアカウントのデータ露出リスクを抑制、`strict` は通常の PII 評価 |
+| ポリシー | `--test-accounts LIST` | 空（`STRIX_GUARD_TEST_ACCOUNTS`） | エージェントが読み書きしてよいアカウント（カンマ区切り） |
+| 裁定 | `--adjudicator MODE` | `off` | `off` は人間に確認、`advisory` は提案のみ、`hybrid` は確信度 0.7 以上で適用、`auto` は全裁定を適用 |
+| 裁定 | `--adjudicator-model NAME` | `openai/gpt-6-sol` | 非 ALLOW とグレーゾーン再審査の主モデル |
+| 裁定 | `--adjudicator-fallback-models LIST` | `google/gemini-3.8-flash,anthropic/claude-opus-4.6` | プロバイダ拒否や失敗時に順に試すモデル |
+| 裁定 | `--adjudicator-max-calls N` | `200` | 1 実行あたりの裁定呼び出し上限 |
+| 裁定 | `--adjudicator-max-cost USD` | `3.0` | 1 実行あたりの裁定コスト上限（USD） |
+| 裁定 | `--adjudicator-review-blocks` | off | `BLOCK` にも再審査を記録（ハードブロックは緩和されません） |
+| 裁定 | `--no-gray-review` | off | `review_band` 以上の `ALLOW` に対する助言審査を無効化 |
+| 裁定 | `--no-jev` | off | JEV を呼ばず、決定論的/ヒューリスティック評価のみ使う |
+| 承認 UI | `--ui MODE` | `auto` | `auto` は TTY なら tmux ポップアップ、それ以外は web/CLI、stdin が非 TTY なら非対話。`cli` / `tmux` / `web` / `noninteractive` も指定可 |
+| 承認 UI | `--on-ask ACTION` | `deny` | 非対話時に人間へ確認が必要な場合の応答（`deny` / `allow`） |
+| 承認 UI | `--approval-timeout SEC` | `180` | 承認待ちのタイムアウト秒（超過で拒否） |
+| 承認 UI | `--auto-allow-revised` | off | 修正後の同系統コマンドを許可済み範囲内で自動許可 |
+| 承認 UI | `--strict` | off | しきい値を下げて確認を出やすくする（デモ用） |
+| セットアップ | `--setup` | off | 起動前に設定ウィザードを表示（回答が各フラグを上書き） |
+| セットアップ | `--no-setup` | off | 設定ウィザードを表示しない |
+| セットアップ | `--language LANG` | `en` | UI と要約プロンプトの言語（`en` / `ja`） |
+| パススルー | `-- <strix 引数>` | — | `--` 以降は Strix へそのまま渡す |
+| 内部用 | `--no-wrap` | off | TTY UI 用の tmux 再実行を行わない |
+
+ポリシーの読み込み順: `--policy` → `STRIX_GUARD_POLICY` → `./guard_policy.json` → `~/.config/strix-guard/policy.json` → `--policy-preset`。
+
+### ポリシープリセット
+
+ガードはプリセットに関係なく、すべてのモードで危険なコマンドを遮断または修正します。exec ゲート、決定論的ルール、JEV、裁定モデル、監査は常に動作します。プリセットが決めるのは開始時の許可範囲だけなので、テストを進められる範囲で最も制限の強いものを選んでください。
+
+| プリセット | 許可する HTTP メソッド | アップロード / SQL 書き込み / 外部通信 | コンテナ内 HTTP サイドカー | 使いどころ |
+|---|---|---|---|---|
+| `full`（既定） | `GET` `HEAD` `OPTIONS` `POST` `PUT` `PATCH` `DELETE` | 許可 | なし | 使い捨ての検証環境や、書き込みを許すステージング |
+| `reference_only` | `GET` `HEAD` `OPTIONS` | 禁止 | あり | 本番同等データに対する参照のみの検証 |
+| `recon` | `GET` `HEAD` `OPTIONS`（レート上限は低め、攻撃ツールなし） | 禁止 | あり | 稼働中システムの初回棚卸し |
+
+プリセットは[ポリシーの読み込み順](#カスタムポリシー)の最後に位置します。`--policy` ファイル、`STRIX_GUARD_POLICY`、`./guard_policy.json`、ユーザ設定のいずれかがあれば、そちらが優先されます。グレーゾーン再審査の `review_band` 既定値は `full` が `0.30`、`reference_only` と `recon` が `0.25` です。
 
 ### 最短の起動: セットアップウィザード
 
@@ -373,11 +437,39 @@ python3 -m strix_guard.launcher \
 
 ### テストアカウントと PII
 
+`--test-accounts` は、どのアカウントがテスト用かをガードに伝えます。一覧は JEV の state と裁定モデルの context に渡されるため、モデルは許可された読み書きを他ユーザーのデータと誤認しません。
+
 ```bash
---test-accounts "alice,bob" --pii-policy test_data_ok
+# 検証ラボ: alice と bob だけをエージェントが使えるアカウントにする
+python3 -m strix_guard.launcher \
+  --environment benchmark --pii-policy test_data_ok \
+  --test-accounts "alice,bob" \
+  --adjudicator auto \
+  -- --target http://host.docker.internal:5000 --non-interactive -m quick
+
+# ステージング: 厳格な PII 評価と QA アカウント 1 件
+python3 -m strix_guard.launcher \
+  --environment staging --pii-policy strict \
+  --test-accounts "qa-user@example.com" \
+  --adjudicator hybrid \
+  -- --target https://staging.example.com --non-interactive
 ```
 
-`benchmark` と `test_data_ok` の組み合わせでは、シードアカウントとエージェントが作ったアカウントをテストデータとして扱い、データ露出のリスクを抑えます。`strict` は staging と production 向けの通常の PII 方針です。
+アカウントはユーザー名・数値 ID・メールアドレスのいずれでも構いません。`STRIX_GUARD_TEST_ACCOUNTS` でも指定でき、`--test-accounts` がポリシーファイルより優先されます。一覧をポリシーと一緒に管理する場合:
+
+```json
+{
+  "preset": "reference_only",
+  "data": {
+    "allowed_test_accounts": ["alice", "bob"],
+    "allow_other_accounts": false,
+    "allow_writes": false,
+    "restore_after_write": true
+  }
+}
+```
+
+アカウント一覧だけではプリセットの許可範囲は広がりません。`data.allow_other_accounts` は一覧外のデータを許可するかを JEV と裁定モデルに伝え、`data.allow_writes` は SQL 書き込みを制御し、`data.restore_after_write` は変更後に状態を戻す前提を記録します。`test_data_ok` がデータ露出スコアを下げる（上限 0.4）のは `benchmark` プロファイルだけで、`staging` と `production` は通常 `strict` を使います。
 
 ### 承認 UI
 
@@ -410,13 +502,38 @@ python3 -m strix_guard.replay <exec_cmds.jsonl> --limit 20
 
 ### 環境プロファイル
 
+`--environment` は実行プロファイル名で、JEV に渡されます。設定ウィザードも同じ項目を質問し、選んだプロファイルから裁定モード・承認タイムアウト・しきい値倍率・コスト上限を埋めます。ウィザードを使わない場合は、以下の例のように各フラグを明示してください。
+
+| プロファイル | PII 方針 | 裁定モード | 承認タイムアウト | しきい値倍率 | コスト上限 | ウィザードのプリセット |
+|---|---|---|---|---|---|---|
+| `benchmark` | `test_data_ok` | `auto` | 180 秒 | ×1.0 | $3.0 | `full` |
+| `staging` | `strict` | `hybrid` | 120 秒 | ×0.5 | $1.5 | `full` |
+| `production` | `strict` | `hybrid` | 60 秒 | ×0.1 | $1.0 | `reference_only` |
+
 ```bash
---environment benchmark   # 使い捨ての検証環境（テストデータ許可、制約緩和）
---environment staging     # 実データに近いステージング環境（厳格な PII 保護）
---environment production  # 本番環境（ポリシー既定値は reference_only）
+# 検証ラボ: full プリセット、書き込み許可、テストアカウントはテストデータ扱い
+python3 -m strix_guard.launcher \
+  --environment benchmark --policy-preset full --pii-policy test_data_ok \
+  --test-accounts "alice,bob" --adjudicator auto \
+  -- --target http://host.docker.internal:5000 --non-interactive -m quick
+
+# ステージング: 参照のみ、しきい値は厳しめ、hybrid 裁定
+python3 -m strix_guard.launcher \
+  --environment staging --policy-preset reference_only --pii-policy strict \
+  --adjudicator hybrid --approval-timeout 120 --adjudicator-max-cost 1.5 \
+  --test-accounts "qa-user@example.com" \
+  -- --target https://staging.example.com --non-interactive
+
+# 本番相当: 参照のみ、人間を置かず、確認が必要なら拒否
+python3 -m strix_guard.launcher \
+  --environment production --policy-preset reference_only --pii-policy strict \
+  --ui noninteractive --on-ask deny \
+  --adjudicator hybrid --approval-timeout 60 --adjudicator-max-cost 1.0 \
+  --test-accounts "qa-user@example.com" \
+  -- --target https://www.example.com --non-interactive
 ```
 
-環境プロファイルは、PII 保護方針・裁定モード・承認タイムアウト・判定しきい値の倍率・コスト上限などを一括定義します。セットアップウィザードもこのプロファイル定義に準拠します。
+`--setup` を使うと、ウィザードが同じ項目（環境・ポリシー・モード・言語・PII・モデル・タイムアウト・アカウント）を質問し、回答を実行に反映します。本番の参照のみテストなら、回答は `production`、`reference_only`、`hybrid`、`ja`、`strict`、`openai/gpt-6-sol`、`60`、`qa-user@example.com` です。
 
 ### 監査ファイル
 
@@ -468,4 +585,5 @@ python3 -m unittest discover -s tests
 
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 機能要件および非機能要件の一覧
 - [docs/TEST_REPORT.md](docs/TEST_REPORT.md) — テストマトリクス、実行結果、既知の制限事項
+- [docs/JEV_CORPUS_REPORT.md](docs/JEV_CORPUS_REPORT.md) — 過去の exec コマンドの JEV 再分類レポート
 - [DESIGN.md](DESIGN.md) — 設計書・アーキテクチャ背景資料

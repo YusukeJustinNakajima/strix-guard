@@ -5,4 +5,5 @@ __pycache__/
 venv/
 guard_runs/
 strix_runs/
+e2e_target/
 *.log
