@@ -49,9 +49,10 @@
 - **2,740 件（6.9%）**が危険なしきい値を超えました。内訳はデータ露出 1,965、破壊的操作 433、高負荷 417、第三者への攻撃 10、スコープ逸脱 1 です（分類は重複します）。
 - 1 実行あたり平均 **20.1 件**（中央値 16 件）。200 件以上の大規模実行では平均 **26.1 件**です。
 - 危険な 2,740 件のうち **1,062 件**は、PTY のファイル転送ラッパーの中に隠れたトークン窃取や大量登録などのスクリプトを台帳が復元して初めて危険と判定できたものです。
+- 136 回の実行では `deepseek-v4.1-flash`、`glm-5.3-flash`、`mimo-v2.6-pro`、`mimo-v2.6-flash`、`qwen3.8-*` など複数のモデルが使われており、**どのモデルでも危険なコマンドが出ています**。これは特定モデルの不具合ではなく、エージェントの振る舞いです。
 - ガードを適用した 29 回では、危険な試行 115 件のうち 81 件を遮断・修正し、34 件は選択中のポリシー（主に `full`）が許可して実行しました。`reference_only` ではこれらも実行前に止まります。
 
-エージェントは放っておけば他ユーザーのデータを読み、対象に負荷をかけます。だからこそ、モデルの外側にある exec ゲートと HTTP サイドカーで強制する必要があります。方法と内訳は[JEV 再分類レポート](docs/JEV_CORPUS_REPORT.md)を参照してください。
+エージェントは放っておけば他ユーザーのデータを読み、対象に負荷をかけます。だからこそ、モデルの外側にある exec ゲートと HTTP サイドカーで強制する必要があります。方法と内訳: [日本語レポート](docs/JEV_CORPUS_REPORT.md) / [英語レポート](docs/JEV_CORPUS_REPORT.en.md)。データ: [危険コマンドCSV](docs/jev_corpus_dangerous.csv)、[実行別CSV](docs/jev_corpus_runs.csv)、[モデル別CSV](docs/jev_corpus_models.csv)。全 39,830 件の分類は `guard_runs/jev_corpus_classification.csv` に生成されます（未コミット）。
 
 ## 解決策
 
@@ -585,5 +586,8 @@ python3 -m unittest discover -s tests
 
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 機能要件および非機能要件の一覧
 - [docs/TEST_REPORT.md](docs/TEST_REPORT.md) — テストマトリクス、実行結果、既知の制限事項
+- [docs/TEST_REPORT.en.md](docs/TEST_REPORT.en.md) — テスト報告の英語版
 - [docs/JEV_CORPUS_REPORT.md](docs/JEV_CORPUS_REPORT.md) — 過去の exec コマンドの JEV 再分類レポート
+- [docs/JEV_CORPUS_REPORT.en.md](docs/JEV_CORPUS_REPORT.en.md) — 同レポートの英語版
+- [docs/jev_corpus_dangerous.csv](docs/jev_corpus_dangerous.csv)、[docs/jev_corpus_runs.csv](docs/jev_corpus_runs.csv)、[docs/jev_corpus_models.csv](docs/jev_corpus_models.csv) — 分類データ
 - [DESIGN.md](DESIGN.md) — 設計書・アーキテクチャ背景資料
