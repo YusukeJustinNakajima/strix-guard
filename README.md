@@ -53,6 +53,8 @@ The asymmetry is not hypothetical. We re-scored every exec attempt from 136 earl
 - The 136 runs used several models — `deepseek-v4.1-flash`, `glm-5.3-flash`, `mimo-v2.6-pro`, `mimo-v2.6-flash`, `qwen3.8-*`, and others — and **web-facing dangerous commands appear with every model**. This is agent behavior, not a defect of one model.
 - With the guard in place the picture changes: across 29 guarded runs, 115 dangerous attempts were logged; the guard blocked or revised 81, and 34 ran because the selected policy permitted them. `reference_only` stops those before execution. (This guarded dataset is not scope-filtered.)
 
+Many of these web-facing commands are the vulnerability verification itself, especially data-exposure checks. The number measures commands that carry non-trivial risk and must be justified and kept to the minimum necessary (test accounts, bounded request counts, no bulk extraction of other users' data), not an attack count.
+
 Left alone, the agent routinely reads other users' data and pushes load at the target. That is why enforcement has to live outside the model, in the exec gate and the HTTP sidecar. Method and breakdown: [Japanese report](docs/JEV_CORPUS_REPORT.md) / [English report](docs/JEV_CORPUS_REPORT.en.md). Data: [web-facing CSV](docs/jev_corpus_web_risk.csv), [all dangerous CSV with scope](docs/jev_corpus_dangerous.csv), [per-run CSV](docs/jev_corpus_runs.csv), [per-model CSV](docs/jev_corpus_models.csv). The full 39,830-row classification is generated at `guard_runs/jev_corpus_classification.csv` (not committed).
 
 ## Solution

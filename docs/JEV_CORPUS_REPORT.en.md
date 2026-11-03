@@ -50,6 +50,10 @@ These runs span multiple models, and **web-app-facing dangerous commands appear 
 - These runs had no guard, so the web-facing dangerous commands were executed (their own success or failure is separate)
 - Categories (web-facing, overlap allowed): data exposure 1,471, high load 365, destructive 323, third party 9, out of scope 1
 
+### Dangerous operations as vulnerability verification
+
+The web-facing count is not an attack count. Many of these commands are the verification steps needed to confirm that a vulnerability exists, especially for data exposure. A defender should confirm the finding with the smallest necessary scope: test accounts, a bounded request count, and no bulk extraction of other users' data or irreversible writes. The guard supports this minimum through test-account allowlists, request/parallel caps, gray-zone review, and adjudicator constraints. The count therefore shows the scale of commands that carry non-trivial risk and must be justified and minimized, not the number of malicious actions.
+
 ### By target (web-facing)
 
 | Target | Runs | Exec calls | Web dangerous | Web rate |

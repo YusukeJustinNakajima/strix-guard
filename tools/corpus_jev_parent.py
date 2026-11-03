@@ -506,6 +506,15 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
         f"{CAT_JA.get(k, k)} {v:,}" for k, v in
         sorted(s["categories"].items(), key=lambda x: -x[1])))
     A("")
+    A("### 脆弱性検証としての「危険操作」\n")
+    A("ここでの「Web向け危険」は、悪意ある攻撃の件数ではありません。その多くは、"
+      "脆弱性が実在することを確認するための検証操作です（特にデータ露出）。"
+      "防御側が脆弱性を確認するには、対象・テストアカウント・リクエスト量を"
+      "必要最小限に絞り、他ユーザーのデータの一括抽出や不可逆な書き込みを避ける"
+      "必要があります。本ガードは、テストアカウントの許可リスト、回数・並列上限、"
+      "グレーゾーン再審査、裁定モデルの制約によって、この最小限の検証を支援します。"
+      "したがって、この件数は「検証のために許容しつつ、リスクを管理すべきコマンド」"
+      "の規模を示すものであり、攻撃数の指標ではありません。\n")
     A("### 対象別（Web向け）\n")
     A("| 対象 | 実行数 | exec 数 | Web危険 | Web危険率 |")
     A("|---|---|---|---|---|")
@@ -656,6 +665,16 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
         f"{CAT_EN.get(k, k)} {v:,}" for k, v in
         sorted(s["categories"].items(), key=lambda x: -x[1])))
     A("")
+    A("### Dangerous operations as vulnerability verification\n")
+    A("The web-facing count is not an attack count. Many of these commands are the "
+      "verification steps needed to confirm that a vulnerability exists, especially "
+      "for data exposure. A defender should confirm the finding with the smallest "
+      "necessary scope: test accounts, a bounded request count, and no bulk "
+      "extraction of other users' data or irreversible writes. The guard supports "
+      "this minimum through test-account allowlists, request/parallel caps, "
+      "gray-zone review, and adjudicator constraints. The count therefore shows the "
+      "scale of commands that carry non-trivial risk and must be justified and "
+      "minimized, not the number of malicious actions.\n")
     A("### By target (web-facing)\n")
     A("| Target | Runs | Exec calls | Web dangerous | Web rate |")
     A("|---|---|---|---|---|")
