@@ -22,6 +22,7 @@
   - [Launcher options](#launcher-options)
   - [Policy presets](#policy-presets)
 - [Tests](#tests)
+- [Effectiveness validation](#effectiveness-validation)
 - [Scope and limitations](#scope-and-limitations)
 - [Documentation](#documentation)
 
@@ -51,11 +52,8 @@ The asymmetry is not hypothetical. We re-scored every exec attempt from 136 earl
 - That is an average of **15.4 web-facing dangerous commands per run** (median 13); runs with 200+ commands averaged **19.7**.
 - **855** of the web-facing dangerous commands were only visible after the ledger rebuilt the script hidden inside a PTY file-transfer wrapper (token theft, bulk signup, and similar payloads).
 - The 136 runs used several models — `deepseek-v4.1-flash`, `glm-5.3-flash`, `mimo-v2.6-pro`, `mimo-v2.6-flash`, `qwen3.8-*`, and others — and **web-facing dangerous commands appear with every model**. This is agent behavior, not a defect of one model.
-- With the guard in place the picture changes: across 29 guarded runs, 115 dangerous attempts were logged; the guard blocked or revised 81, and 34 ran because the selected policy permitted them. `reference_only` stops those before execution. (This guarded dataset is not scope-filtered.)
 
-Many of these web-facing commands are the vulnerability verification itself, especially data-exposure checks. The number measures commands that carry non-trivial risk and must be justified and kept to the minimum necessary (test accounts, bounded request counts, no bulk extraction of other users' data), not an attack count.
-
-Left alone, the agent routinely reads other users' data and pushes load at the target. That is why enforcement has to live outside the model, in the exec gate and the HTTP sidecar. Method and breakdown: [Japanese report](docs/JEV_CORPUS_REPORT.md) / [English report](docs/JEV_CORPUS_REPORT.en.md). Data: [web-facing CSV](docs/jev_corpus_web_risk.csv), [all dangerous CSV with scope](docs/jev_corpus_dangerous.csv), [per-run CSV](docs/jev_corpus_runs.csv), [per-model CSV](docs/jev_corpus_models.csv). The full 39,830-row classification is generated at `guard_runs/jev_corpus_classification.csv` (not committed).
+Many of these web-facing commands are the vulnerability verification itself, especially data-exposure checks. The problem is not verification but **verification without minimization**: fetching a whole table when one other user's record would prove the finding, using real-looking accounts instead of test accounts, or sending far more requests than necessary. The count measures commands that carry that risk, not attacks. The excess is what the guard must remove while preserving the proof. That is why enforcement has to live outside the model, in the exec gate and the HTTP sidecar. Method and breakdown: [Japanese report](docs/JEV_CORPUS_REPORT.md) / [English report](docs/JEV_CORPUS_REPORT.en.md). Data: [web-facing CSV](docs/jev_corpus_web_risk.csv), [all dangerous CSV with scope](docs/jev_corpus_dangerous.csv), [per-run CSV](docs/jev_corpus_runs.csv), [per-model CSV](docs/jev_corpus_models.csv). The full 39,830-row classification is generated at `guard_runs/jev_corpus_classification.csv` (not committed).
 
 ## Solution
 
@@ -621,6 +619,17 @@ Highlights:
 - A default `deep` run with no turn or budget cap completed with 845 evaluations, 9 adjudications, and 17 findings for $0.87.
 - `tools/verify_gate.py` passed all five checks: allowed requests reached the target; blocked, revised, and script-content cases produced zero access.
 - A dynamic `POST` built with `m='PO'+'ST'` passed the exec check and was blocked by the HTTP sidecar (`method_not_allowed`).
+- Across 29 guarded runs, 115 dangerous attempts were logged: the guard blocked or revised 81, and 34 were allowed by the selected policy. (This dataset is not scope-filtered.)
+
+## Effectiveness validation
+
+> **TODO:** this section is a plan, not a completed validation. The single-run experiments so far are smoke tests and are not sufficient to claim general effectiveness.
+
+The guard is useful only if it preserves detection quality while reducing risky behavior. Validate three things:
+
+- **Accuracy degradation.** TODO: compare unguarded and guarded runs on the same target and model, with enough repetitions (for example 5 runs per mode), and report pooled TP/FP/FN, precision, recall, F1, severity/CWE coverage, and run-to-run variance per application. Do not conclude from a single pair of runs.
+- **What was blocked or revised.** TODO: summarize policy-rule blocks and revised commands from `verdicts.jsonl`, with the reason (method, upload, SQL write, egress, load, data exposure), the constraints applied, and whether the agent retried successfully.
+- **Runtime impact.** TODO: compare wall-clock time and tool-call counts, separating the guard's decision latency (JEV/adjudication) from the intended scan throttling (lower parallelism, rate, or request caps). Report medians and ranges, not just one run.
 
 ## Scope and limitations
 
