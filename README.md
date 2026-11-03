@@ -272,6 +272,9 @@ python3 -m unittest discover -s tests
 
 ```text
 strix_guard/
+├── .gitignore
+├── README.md / README.ja.md
+├── DESIGN.md
 ├── strix_guard/          # guard package (run as a module; no install needed)
 │   ├── launcher.py       # main entry point: proxy, policy, Strix process
 │   ├── docker_proxy.py   # Docker API interception and notice rewrite
@@ -284,10 +287,7 @@ strix_guard/
 │   └── replay.py         # replay entry point (python3 -m strix_guard.replay)
 ├── tools/                # standalone verification and analysis scripts
 ├── tests/                # unittest suite
-├── docs/                 # requirements, test reports, JEV reports and CSVs
-├── guard_runs/           # generated audit output (gitignored)
-├── strix_runs/           # generated Strix run state (gitignored)
-└── e2e_target/           # generated Apache target and logs (gitignored)
+└── docs/                 # requirements, test reports, JEV reports and CSVs
 ```
 
 The main program is the package entry point, not a standalone file:
@@ -302,19 +302,17 @@ The scripts in `tools/` are run directly from the repository root:
 | Script | Purpose | Needs |
 |---|---|---|
 | `tools/verify_gate.py` | Five-case gate check with an access-log target: allowed traffic reaches it; blocked, revised, and script-content cases do not | Docker |
-| `tools/retest_target_setup.sh` | Starts an Apache (`httpd:2.4-alpine`) target on port 8081 with a file access log under `e2e_target/logs/` | Docker |
+| `tools/retest_target_setup.sh` | Starts an Apache (`httpd:2.4-alpine`) target on port 8081 with a file access log | Docker |
 | `tools/retest_driver2.py` | 30-case direct gate verification against the Apache target (exec.env proxy, sidecar caps, CONNECT, script resolution) | Docker, Apache target |
 | `tools/retest_adj_webui.py` | Live adjudicator fallback check and Web UI approval smoke test | OpenRouter key |
 | `tools/docker_state.py` | Read-only dump of Docker versions, containers, and images via the socket | Docker socket |
 | `tools/scope_filter.py` | Shared classifier for target / external / local / ambiguous exec commands | none |
-| `tools/corpus_parent_stats.py` | Extracts exec commands and model attribution from the historical Strix runs | `strix_runs/` |
-| `tools/corpus_jev_parent.py` | JEV re-classification and CSV/report generation for the 136-run corpus | `strix_runs/`, cached JEV data |
-| `tools/corpus_map.py` | Maps guarded audit runs to Strix runs by container ID | `guard_runs/`, `strix_runs/` |
-| `tools/corpus_jev.py` | JEV report for the guarded-run reference corpus | `guard_runs/`, `strix_runs/` |
+| `tools/corpus_parent_stats.py` | Extracts exec commands and model attribution from historical Strix runs | historical Strix runs |
+| `tools/corpus_jev_parent.py` | JEV re-classification and CSV/report generation for the 136-run corpus | historical Strix runs, cached JEV data |
+| `tools/corpus_map.py` | Maps guarded audit runs to Strix runs by container ID | guarded audit runs, Strix runs |
+| `tools/corpus_jev.py` | JEV report for the guarded-run reference corpus | guarded audit runs, Strix runs |
 
-`tests/` is the regression suite (`python3 -m unittest discover -s tests`). `docs/` contains the requirement matrix, test reports, the JEV corpus reports, and the CSV exports. `guard_runs/`, `strix_runs/`, and `e2e_target/` are generated at runtime and are intentionally not committed.
-
-The A/B experiment wrappers used in this workspace (`run-strix-guard-ab.sh`, `guard_ab_report.py`, `guard_ab_analysis.py`) live in the parent `scripts/` directory, outside this repository.
+`tests/` is the regression suite (`python3 -m unittest discover -s tests`). `docs/` contains the requirement matrix, test reports, the JEV corpus reports, and the CSV exports.
 
 ### Launcher options
 

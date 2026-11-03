@@ -272,6 +272,9 @@ python3 -m unittest discover -s tests
 
 ```text
 strix_guard/
+├── .gitignore
+├── README.md / README.ja.md
+├── DESIGN.md
 ├── strix_guard/          # ガード本体（モジュールとして実行。インストール不要）
 │   ├── launcher.py       # メイン入口: プロキシ、ポリシー、Strix 起動
 │   ├── docker_proxy.py   # Docker API のインターセプトと通知差し替え
@@ -284,10 +287,7 @@ strix_guard/
 │   └── replay.py         # replay 入口（python3 -m strix_guard.replay）
 ├── tools/                # 独立した検証・分析スクリプト
 ├── tests/                # unittest スイート
-├── docs/                 # 要件、テスト報告、JEV レポート、CSV
-├── guard_runs/           # 実行時の監査出力（gitignore 対象）
-├── strix_runs/           # 実行時の Strix 状態（gitignore 対象）
-└── e2e_target/           # 検証用 Apache とログ（gitignore 対象）
+└── docs/                 # 要件、テスト報告、JEV レポート、CSV
 ```
 
 メインの実行単位はパッケージのエントリポイントです。
@@ -302,19 +302,17 @@ python3 -m strix_guard.replay --help
 | スクリプト | 役割 | 必要なもの |
 |---|---|---|
 | `tools/verify_gate.py` | アクセスログ付きターゲットで5項目のゲート検証（許可は到達、遮断・修正・スクリプト内容は未到達） | Docker |
-| `tools/retest_target_setup.sh` | 検証用 Apache（`httpd:2.4-alpine`）を 8081 で起動し、`e2e_target/logs/` にアクセスログを出す | Docker |
+| `tools/retest_target_setup.sh` | 検証用 Apache（`httpd:2.4-alpine`）を 8081 で起動し、アクセスログをファイルに出す | Docker |
 | `tools/retest_driver2.py` | Apache ターゲットに対する30項目の直接ゲート検証（exec環境のプロキシ、サイドカー上限、CONNECT、スクリプト解決） | Docker、Apache ターゲット |
 | `tools/retest_adj_webui.py` | 実APIでの裁定フォールバック確認と Web UI 承認のスモークテスト | OpenRouter キー |
 | `tools/docker_state.py` | Docker のバージョン、コンテナ、イメージをソケット経由で読み取り表示 | Docker ソケット |
 | `tools/scope_filter.py` | exec を target / external / local / ambiguous に分類する共通フィルタ | なし |
-| `tools/corpus_parent_stats.py` | 過去の Strix 実行から exec コマンドとモデル帰属を抽出 | `strix_runs/` |
-| `tools/corpus_jev_parent.py` | 136実行コーパスの JEV 再分類と CSV/レポート生成 | `strix_runs/`、JEV キャッシュ |
-| `tools/corpus_map.py` | ガード監査と Strix 実行をコンテナIDで対応付け | `guard_runs/`、`strix_runs/` |
-| `tools/corpus_jev.py` | ガード適用済み参照コーパスの JEV レポート | `guard_runs/`、`strix_runs/` |
+| `tools/corpus_parent_stats.py` | 過去の Strix 実行から exec コマンドとモデル帰属を抽出 | 過去の Strix 実行 |
+| `tools/corpus_jev_parent.py` | 136実行コーパスの JEV 再分類と CSV/レポート生成 | 過去の Strix 実行、JEV キャッシュ |
+| `tools/corpus_map.py` | ガード監査と Strix 実行をコンテナIDで対応付け | ガード監査、Strix 実行 |
+| `tools/corpus_jev.py` | ガード適用済み参照コーパスの JEV レポート | ガード監査、Strix 実行 |
 
-`tests/` は回帰テスト一式です（`python3 -m unittest discover -s tests`）。`docs/` には要件、テスト報告、JEV コーパスレポート、CSV があります。`guard_runs/`、`strix_runs/`、`e2e_target/` は実行時に生成されるためコミットしていません。
-
-このワークスペースで使っている A/B 実験用のラッパー（`run-strix-guard-ab.sh`、`guard_ab_report.py`、`guard_ab_analysis.py`）は、このリポジトリの外にある親ディレクトリの `scripts/` に置いています。
+`tests/` は回帰テスト一式です（`python3 -m unittest discover -s tests`）。`docs/` には要件、テスト報告、JEV コーパスレポート、CSV があります。
 
 ### 起動オプション（launcher）
 
