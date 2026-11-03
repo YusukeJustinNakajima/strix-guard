@@ -30,6 +30,8 @@
 
 Attackers increasingly use AI agents to find application vulnerabilities. They can point the same tools and models at a target and let the agent try destructive paths. A failed attempt, or a damaged target, costs them little.
 
+Strix itself has already been observed in real-world abuse: Gambit Security documented autonomous agents probing online retailers. See [Autonomous AI agents on online retailers](https://gambit.security/blog-posts/autonomous-ai-agents-online-retailers-25-a-company).
+
 Defenders need the same attacker's-eye view. They need to use the same tools and models, find what an external attacker would find, fix it by risk, and release. As models improve, the set of findable issues changes, so the work continues after every release and every model upgrade.
 
 The two sides are not symmetric. An attacker can drop a table, overwrite a file, or lock an account and treat the damage as part of the test. A defender cannot. The test has to stay non-destructive: read-only where possible, writes limited to test data and accounts, request volume bounded, and state restored. The defender also has to prove the agent stayed inside those limits.
