@@ -18,6 +18,7 @@
   - [リスク評価と裁定モデル（上位LLM）](#3-リスク評価と裁定モデル上位llm)
   - [HTTP サイドカー](#4-http-サイドカー)
 - [使い方](#使い方)
+  - [リポジトリ構成](#リポジトリ構成)
   - [起動オプション（launcher）](#起動オプションlauncher)
   - [ポリシープリセット](#ポリシープリセット)
 - [テスト](#テスト)
@@ -154,7 +155,7 @@ Strix の PTY ラッパーが存在する場合は、ラッパー構造を維持
 
 JEV は Typesafe の高速で非常に安価な判定モデルです。コマンドを固定のリスク次元で採点するため、strix-guard は全 exec に組み込んでも待ち時間と費用をほとんど増やさずに検査できます。高価な裁定モデルは非 ALLOW とグレーゾーンだけに温存できます。JEV の判定コストは 1 件あたり約 $0.00002〜$0.00005 で、毎回の検査がテストの体験を損ないません。詳細: [Introducing System One models and JEV](https://typesafe.ai/blog/introducing-system-one-models-and-jev)（リンク先ではこの種のモデルを System One と呼んでいます）。
 
-JEV（判定エンジン）は、破壊性・サーバー負荷・データ露出・スコープ違反・第三者影響という5つのリスク次元と、判断材料の十分性をスコアリングします。これを受け、Policy Engine が設定されたしきい値に基づいて最終判定（ALLOW / REVISE / HOLD / BLOCK / NEED_INFO）を下します。
+JEV（判定エンジン）は、破壊性・サーバー負荷・データ露出・スコープ違反・第三者影響という5つのリスク次元と、判断材料の十分性をスコアリングします。これを受け、Policy Engine が設定されたしきい値に基づいて最終判定（ALLOW / REVISE / HOLD / BLOCK / NEED_INFO）を下します。プロンプトは宣言された対象ウェブアプリに限定しており、サンドボックス内の `rm -rf /workspace/...`、ローカルのスクリプト書き込み、Caido のリクエスト閲覧は対象リスクとして数えないよう指示しています。レポートの過去コーパスは旧来の広いプロンプトで採点した結果を、別途スコープフィルタで集計したものです。
 
 推論能力の高い上位モデル（裁定モデル / Adjudicator）を呼び出すのは、以下の場合に限られます。
 
@@ -266,6 +267,54 @@ sequenceDiagram
 cd strix_guard
 python3 -m unittest discover -s tests
 ```
+
+### リポジトリ構成
+
+```text
+strix_guard/
+├── strix_guard/          # ガード本体（モジュールとして実行。インストール不要）
+│   ├── launcher.py       # メイン入口: プロキシ、ポリシー、Strix 起動
+│   ├── docker_proxy.py   # Docker API のインターセプトと通知差し替え
+│   ├── decision.py       # JEV リスク評価 + Policy Engine
+│   ├── adjudicator.py    # 上位モデルの裁定とフォールバック
+│   ├── policy*.py        # 決定論的ポリシー、ポリシーファイル読み込み
+│   ├── ledger.py         # エージェントが書いたスクリプトの復元
+│   ├── sidecar_manager.py / http_sidecar.py
+│   ├── audit.py / ui.py / webui.py / approve.py / setup.py / i18n.py
+│   └── replay.py         # replay 入口（python3 -m strix_guard.replay）
+├── tools/                # 独立した検証・分析スクリプト
+├── tests/                # unittest スイート
+├── docs/                 # 要件、テスト報告、JEV レポート、CSV
+├── guard_runs/           # 実行時の監査出力（gitignore 対象）
+├── strix_runs/           # 実行時の Strix 状態（gitignore 対象）
+└── e2e_target/           # 検証用 Apache とログ（gitignore 対象）
+```
+
+メインの実行単位はパッケージのエントリポイントです。
+
+```bash
+python3 -m strix_guard.launcher --help
+python3 -m strix_guard.replay --help
+```
+
+`tools/` のスクリプトはリポジトリルートから直接実行します。
+
+| スクリプト | 役割 | 必要なもの |
+|---|---|---|
+| `tools/verify_gate.py` | アクセスログ付きターゲットで5項目のゲート検証（許可は到達、遮断・修正・スクリプト内容は未到達） | Docker |
+| `tools/retest_target_setup.sh` | 検証用 Apache（`httpd:2.4-alpine`）を 8081 で起動し、`e2e_target/logs/` にアクセスログを出す | Docker |
+| `tools/retest_driver2.py` | Apache ターゲットに対する30項目の直接ゲート検証（exec環境のプロキシ、サイドカー上限、CONNECT、スクリプト解決） | Docker、Apache ターゲット |
+| `tools/retest_adj_webui.py` | 実APIでの裁定フォールバック確認と Web UI 承認のスモークテスト | OpenRouter キー |
+| `tools/docker_state.py` | Docker のバージョン、コンテナ、イメージをソケット経由で読み取り表示 | Docker ソケット |
+| `tools/scope_filter.py` | exec を target / external / local / ambiguous に分類する共通フィルタ | なし |
+| `tools/corpus_parent_stats.py` | 過去の Strix 実行から exec コマンドとモデル帰属を抽出 | `strix_runs/` |
+| `tools/corpus_jev_parent.py` | 136実行コーパスの JEV 再分類と CSV/レポート生成 | `strix_runs/`、JEV キャッシュ |
+| `tools/corpus_map.py` | ガード監査と Strix 実行をコンテナIDで対応付け | `guard_runs/`、`strix_runs/` |
+| `tools/corpus_jev.py` | ガード適用済み参照コーパスの JEV レポート | `guard_runs/`、`strix_runs/` |
+
+`tests/` は回帰テスト一式です（`python3 -m unittest discover -s tests`）。`docs/` には要件、テスト報告、JEV コーパスレポート、CSV があります。`guard_runs/`、`strix_runs/`、`e2e_target/` は実行時に生成されるためコミットしていません。
+
+このワークスペースで使っている A/B 実験用のラッパー（`run-strix-guard-ab.sh`、`guard_ab_report.py`、`guard_ab_analysis.py`）は、このリポジトリの外にある親ディレクトリの `scripts/` に置いています。
 
 ### 起動オプション（launcher）
 

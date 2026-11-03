@@ -474,6 +474,9 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
       "別集計し、Web向けの件数には含めていません")
     A(f"  - Web向け危険 {s['web_risky_attempts']:,} 件のうち "
       f"**{s['web_risky_with_script']:,} 件**はスクリプト本文を解決して判定")
+    A("- 注: このコーパスのJEVスコアは旧来の広いプロンプトで取得済みのキャッシュです。"
+      "Web向け判定は後段のスコープフィルタで行っており、今後の実行ではJEVプロンプト自体が"
+      "対象ウェブアプリに限定されます。")
     A("- モデルの紐付け: `run.json` の `llm_usage.agents`（agent_id→model）と "
       "`agents.db` の `session_id` を対応付け、exec ごとの実行モデルを特定")
     A("- リスク評価: JEV（`typesafe/jev-1.14`）で 5 次元を再スコアリング。"
@@ -621,6 +624,9 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
       "`ambiguous` and are not counted in the headline")
     A(f"  - {s['web_risky_with_script']:,} of the {s['web_risky_attempts']:,} "
       "web-facing dangerous commands were judged with resolved script content")
+    A("- Note: the corpus JEV scores are cached from the earlier broad prompt. "
+      "Web-facing classification is applied afterwards by the scope filter; "
+      "future runs use the target-scoped JEV prompt directly.")
     A("- Model attribution: match `agent_id` to `model` from `run.json` "
       "(`llm_usage.agents`) with the `session_id` of each message in `agents.db`, "
       "so each exec is attributed to the model that issued it")

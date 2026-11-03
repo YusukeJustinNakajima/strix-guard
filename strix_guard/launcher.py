@@ -57,6 +57,25 @@ def find_docker_cli() -> str | None:
 _URL_RE = re.compile(r"https?://[^\s'\"<>`]+")
 
 
+def _target_from_args(strix_args: list) -> str | None:
+    """Extract the declared target from Strix arguments (--target/-t/target-list)."""
+    args_list = [a for a in (strix_args or []) if a != "--"]
+    for i, a in enumerate(args_list):
+        if a in ("--target", "-t") and i + 1 < len(args_list):
+            return args_list[i + 1]
+        if a.startswith("--target="):
+            return a.split("=", 1)[1]
+        if a in ("--target-list",) and i + 1 < len(args_list):
+            try:
+                for line in open(args_list[i + 1], encoding="utf-8"):
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        return line
+            except Exception:
+                pass
+    return None
+
+
 def _inner_command(cmd: str) -> str:
     """PTYラッパーやシェル起動ラッパーを剥がして、実際のコマンドを取り出す"""
     s = cmd.strip()
@@ -359,6 +378,7 @@ Arguments after '--' are passed to Strix unchanged, for example:
     elif guard_policy.get("http", {}).get("enforce"):
         print("[strix-guard] http enforce disabled by --no-http-enforce", flush=True)
     ledger_cache = LedgerCache(args.runs_dir)
+    target = _target_from_args(args.strix_args)
     adjudicator = None
     if args.adjudicator != "off":
         from .adjudicator import Adjudicator
@@ -454,7 +474,9 @@ Arguments after '--' are passed to Strix unchanged, for example:
                           "card": None, "detail": v.detail}, source="policy_rule")
             return ("deny", v.message)
         ev = svc.evaluate(cmd, script_content=script,
-                          context={"environment": env_label, "guard_policy": policy_ctx},
+                          context={"environment": env_label,
+                                   "guard_policy": policy_ctx,
+                                   "target": target},
                           want_card=True)
         summary = ev.decision.as_dict()
         audit.record({"kind": "evaluation", "container_id": container_id, "cmd": cmd,
@@ -473,6 +495,7 @@ Arguments after '--' are passed to Strix unchanged, for example:
                         context={"environment": env_label, "family": fam,
                                  "allowed_test_accounts": test_accounts,
                                  "guard_policy": policy_ctx,
+                                 "target": target,
                                  "review_mode": "gray_zone",
                                  "review_band_hits": hits},
                         history=revise_history.get(fam))
@@ -505,7 +528,8 @@ Arguments after '--' are passed to Strix unchanged, for example:
                                                       "policy_block": sorted(reasons),
                                                       "block_kind": "hard" if hard else "soft",
                                                       "allowed_test_accounts": test_accounts,
-                                                      "guard_policy": policy_ctx},
+                                                      "guard_policy": policy_ctx,
+                                                      "target": target},
                                              history=revise_history.get(fam))
                 audit.record({"kind": "block_review", "container_id": container_id, "cmd": cmd,
                               "policy_reasons": sorted(reasons),
@@ -547,7 +571,8 @@ Arguments after '--' are passed to Strix unchanged, for example:
                                          decision=ev.decision,
                                          context={"environment": env_label, "family": fam,
                                                   "allowed_test_accounts": test_accounts,
-                                                  "guard_policy": policy_ctx},
+                                                  "guard_policy": policy_ctx,
+                                                  "target": target},
                                          history=revise_history.get(fam))
             audit.record({"kind": "adjudication", "container_id": container_id, "cmd": cmd,
                           "action": (adj or {}).get("action"),
