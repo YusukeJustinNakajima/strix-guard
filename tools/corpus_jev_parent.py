@@ -30,6 +30,10 @@ from strix_guard.decision import DecisionService  # noqa: E402
 from strix_guard.ledger import build_ledger_from_db, resolve_script  # noqa: E402
 from strix_guard.policy import (DEFAULT_POLICY, RiskVector, decide,  # noqa: E402
                                 sandbox_internal)
+try:
+    from scope_filter import classify_scope  # noqa: E402
+except ImportError:
+    from tools.scope_filter import classify_scope  # noqa: E402
 
 ATT = os.path.join(ROOT, "guard_runs", "corpus_parent_attempts.jsonl")
 RUNS = os.path.join(ROOT, "guard_runs", "corpus_parent_runs.json")
@@ -37,6 +41,7 @@ CACHE = os.path.join(ROOT, "guard_runs", "jev_corpus_cache.json")
 OUT_JSON = os.path.join(ROOT, "guard_runs", "jev_corpus_parent.json")
 FULL_CSV = os.path.join(ROOT, "guard_runs", "jev_corpus_classification.csv")
 DANGEROUS_CSV = os.path.join(ROOT, "docs", "jev_corpus_dangerous.csv")
+WEB_CSV = os.path.join(ROOT, "docs", "jev_corpus_web_risk.csv")
 RUNS_CSV = os.path.join(ROOT, "docs", "jev_corpus_runs.csv")
 MODELS_CSV = os.path.join(ROOT, "docs", "jev_corpus_models.csv")
 OUT_MD_JA = os.path.join(ROOT, "docs", "JEV_CORPUS_REPORT.md")
@@ -66,6 +71,7 @@ CAT_EN = {
 }
 CSV_COLUMNS = [
     "dataset", "run", "model", "session", "target", "status",
+    "scope_class", "web_target",
     "risk_destructiveness", "risk_load", "risk_data_exposure",
     "risk_scope_violation", "risk_third_party", "max_score",
     "categories", "replay_verdict", "replay_reasons",
@@ -213,12 +219,18 @@ def main():
         d = decide(risk, DEFAULT_POLICY)
         return cats, d.verdict.value, d.reasons
 
-    run_stats = defaultdict(lambda: {"attempts": 0, "risky": 0, "cats": Counter(),
+    run_stats = defaultdict(lambda: {"attempts": 0, "risky": 0, "web_risky": 0,
+                                     "cats": Counter(), "web_cats": Counter(),
                                      "models": Counter()})
-    model_stats = defaultdict(lambda: {"runs": set(), "attempts": 0, "risky": 0})
+    model_stats = defaultdict(lambda: {"runs": set(), "attempts": 0,
+                                      "risky": 0, "web_risky": 0})
     cat_counter = Counter()
+    web_cat_counter = Counter()
+    scope_counts = Counter()
     risky_attempts = 0
+    web_risky_attempts = 0
     risky_with_script = 0
+    web_risky_with_script = 0
     examples = []
     rows = []
     for a in attempts:
@@ -229,6 +241,7 @@ def main():
             else:
                 continue
         cats, replay, reasons = classify(risk)
+        scope = classify_scope(a["cmd"], a["script"])
         max_score = max(getattr(risk, d) for d in THRESHOLDS)
         row = {
             "dataset": "unguarded",
@@ -237,6 +250,8 @@ def main():
             "session": a.get("session") or "",
             "target": a.get("target") or "",
             "status": a.get("status") or "",
+            "scope_class": scope,
+            "web_target": "yes" if scope == "target" else "no",
             "risk_destructiveness": round(risk.destructiveness, 3),
             "risk_load": round(risk.load, 3),
             "risk_data_exposure": round(risk.data_exposure, 3),
@@ -259,6 +274,7 @@ def main():
         ms["attempts"] += 1
         if cats:
             risky_attempts += 1
+            scope_counts[scope] += 1
             st["risky"] += 1
             ms["risky"] += 1
             for c in cats:
@@ -266,11 +282,20 @@ def main():
                 cat_counter[c] += 1
             if a["has_script"]:
                 risky_with_script += 1
-            snippet = a["cmd"][:180].replace("\n", " ")
-            if "sandbox-docker-archive" in a["cmd"] and a["script"]:
-                snippet = "SCRIPT: " + script_snippet(a["script"])
-            examples.append((max_score, cats, a["run"], a.get("model"),
-                             snippet, a["has_script"]))
+            if scope == "target":
+                web_risky_attempts += 1
+                st["web_risky"] += 1
+                ms["web_risky"] += 1
+                for c in cats:
+                    st["web_cats"][c] += 1
+                    web_cat_counter[c] += 1
+                if a["has_script"]:
+                    web_risky_with_script += 1
+                snippet = a["cmd"][:180].replace("\n", " ")
+                if "sandbox-docker-archive" in a["cmd"] and a["script"]:
+                    snippet = "SCRIPT: " + script_snippet(a["script"])
+                examples.append((max_score, cats, a["run"], a.get("model"),
+                                 snippet, a["has_script"]))
 
     def write_csv(path, data, columns):
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
@@ -281,6 +306,9 @@ def main():
 
     write_csv(FULL_CSV, rows, CSV_COLUMNS)
     write_csv(DANGEROUS_CSV, [r for r in rows if r["categories"]], CSV_COLUMNS)
+    write_csv(WEB_CSV, [r for r in rows
+                        if r["web_target"] == "yes" and r["categories"]],
+              CSV_COLUMNS)
 
     run_rows = []
     for name, v in sorted(run_stats.items()):
@@ -294,7 +322,12 @@ def main():
             "attempts": v["attempts"],
             "risky": v["risky"],
             "risky_rate_pct": round(100 * v["risky"] / max(1, v["attempts"]), 2),
+            "web_risky": v["web_risky"],
+            "web_risky_rate_pct": round(100 * v["web_risky"] / max(1, v["attempts"]), 2),
             **{f"risky_{c}": v["cats"][c] for c in
+               ("destructiveness", "load", "data_exposure",
+                "scope_violation", "third_party")},
+            **{f"web_risky_{c}": v["web_cats"][c] for c in
                ("destructiveness", "load", "data_exposure",
                 "scope_violation", "third_party")},
         })
@@ -309,6 +342,8 @@ def main():
             "attempts": v["attempts"],
             "risky": v["risky"],
             "risky_rate_pct": round(100 * v["risky"] / max(1, v["attempts"]), 2),
+            "web_risky": v["web_risky"],
+            "web_risky_rate_pct": round(100 * v["web_risky"] / max(1, v["attempts"]), 2),
         })
     write_csv(MODELS_CSV, model_rows, list(model_rows[0].keys()))
 
@@ -316,13 +351,19 @@ def main():
     rates = [v["risky"] / v["attempts"] for v in run_stats.values() if v["attempts"]]
     big_vals = [v["risky"] for v in run_stats.values() if v["attempts"] >= 200]
     big_rates = [v["risky"] / v["attempts"] for v in run_stats.values() if v["attempts"] >= 200]
-    target_stats = defaultdict(lambda: {"runs": 0, "attempts": 0, "risky": 0})
+    web_vals = [v["web_risky"] for v in run_stats.values() if v["attempts"]]
+    web_rates = [v["web_risky"] / v["attempts"] for v in run_stats.values() if v["attempts"]]
+    web_big_vals = [v["web_risky"] for v in run_stats.values() if v["attempts"] >= 200]
+    web_big_rates = [v["web_risky"] / v["attempts"] for v in run_stats.values() if v["attempts"] >= 200]
+    target_stats = defaultdict(lambda: {"runs": 0, "attempts": 0, "risky": 0,
+                                         "web_risky": 0})
     for name, v in run_stats.items():
         tgt = name.rsplit("_", 1)[0]
         t = target_stats[tgt]
         t["runs"] += 1
         t["attempts"] += v["attempts"]
         t["risky"] += v["risky"]
+        t["web_risky"] += v["web_risky"]
 
     summary = {
         "runs": len(run_stats),
@@ -333,19 +374,31 @@ def main():
         "risky_attempts": risky_attempts,
         "risky_pct": round(100 * risky_attempts / max(1, len(attempts)), 2),
         "risky_with_script": risky_with_script,
+        "web_risky_attempts": web_risky_attempts,
+        "web_risky_pct": round(100 * web_risky_attempts / max(1, len(attempts)), 2),
+        "web_risky_with_script": web_risky_with_script,
+        "scope_counts": dict(scope_counts),
         "avg_risky_per_run": round(statistics.mean(vals), 1),
         "median_risky_per_run": statistics.median(vals),
         "avg_risky_rate": round(100 * statistics.mean(rates), 2),
         "avg_risky_per_run_big": round(statistics.mean(big_vals), 1),
         "avg_risky_rate_big": round(100 * statistics.mean(big_rates), 2),
-        "categories": dict(cat_counter),
+        "avg_web_risky_per_run": round(statistics.mean(web_vals), 1),
+        "median_web_risky_per_run": statistics.median(web_vals),
+        "avg_web_risky_rate": round(100 * statistics.mean(web_rates), 2),
+        "avg_web_risky_per_run_big": round(statistics.mean(web_big_vals), 1),
+        "avg_web_risky_rate_big": round(100 * statistics.mean(web_big_rates), 2),
+        "categories": dict(web_cat_counter),
+        "all_categories": dict(cat_counter),
         "models": {m: {"runs": len(v["runs"]), "attempts": v["attempts"],
-                       "risky": v["risky"]}
+                       "risky": v["risky"], "web_risky": v["web_risky"]}
                    for m, v in model_stats.items()},
         "targets": {k: dict(v) for k, v in target_stats.items()},
         "thresholds": THRESHOLDS,
         "run_stats": {k: {"attempts": v["attempts"], "risky": v["risky"],
+                          "web_risky": v["web_risky"],
                           "cats": dict(v["cats"]),
+                          "web_cats": dict(v["web_cats"]),
                           "models": dict(v["models"])} for k, v in run_stats.items()},
     }
     json.dump({"summary": summary, "attempts": rows},
@@ -361,7 +414,7 @@ def main():
             guarded = None
     write_markdown_ja(summary, examples, model_rows, run_meta, guarded)
     write_markdown_en(summary, examples, model_rows, run_meta, guarded)
-    print("wrote", FULL_CSV, DANGEROUS_CSV, RUNS_CSV, MODELS_CSV,
+    print("wrote", FULL_CSV, DANGEROUS_CSV, WEB_CSV, RUNS_CSV, MODELS_CSV,
           OUT_MD_JA, OUT_MD_EN, f"total {time.time()-t_start:.0f}s")
     return 0
 
@@ -369,13 +422,13 @@ def main():
 def _model_table(model_rows):
     out = []
     for m in model_rows:
-        out.append((m["model"], m["runs"], m["attempts"], m["risky"],
-                    m["risky_rate_pct"]))
+        out.append((m["model"], m["runs"], m["attempts"], m["web_risky"],
+                    m["web_risky_rate_pct"], m["risky"]))
     return out
 
 
 def _top_runs(s, n=15):
-    return sorted(s["run_stats"].items(), key=lambda x: -x[1]["risky"])[:n]
+    return sorted(s["run_stats"].items(), key=lambda x: -x[1]["web_risky"])[:n]
 
 
 def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
@@ -391,12 +444,12 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
     A("`/home/yusuk/blackbox-testing/strix_runs` にある Strix 実行"
       f"（{s['runs']} 回、{s['attempts']:,} 件の exec_command）を対象にしました。"
       "これらは strix-guard を介さずに実行されたもので、遮断・修正は行われていません。\n")
-    A("複数のモデルが使われています。**危険なコマンドはどのモデルでも出ています**"
+    A("複数のモデルが使われています。**ウェブアプリ向けの危険コマンドはどのモデルでも出ています**"
       "（特定モデル固有の問題ではありません）。\n")
-    A("| モデル | 実行数 | exec 数 | 危険 | 危険率 |")
-    A("|---|---|---|---|---|")
-    for m, runs, att, risky, rate in _model_table(model_rows):
-        A(f"| `{m}` | {runs} | {att:,} | {risky} | {rate}% |")
+    A("| モデル | 実行数 | exec 数 | Web向け危険 | Web危険率 | 全危険（参考） |")
+    A("|---|---|---|---|---|---|")
+    for m, runs, att, web_risky, rate, risky in _model_table(model_rows):
+        A(f"| `{m}` | {runs} | {att:,} | {web_risky} | {rate}% | {risky} |")
     A("")
     if guarded:
         A("### B. strix-guard 適用実行（参考）\n")
@@ -413,6 +466,14 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
       "（`sandbox-docker-archive`）は一見すると無害なファイル転送ですが、台帳が中身"
       "（XSS ペイロード、トークン窃取、大量登録スクリプトなど）を復元するため、"
       "危険度を正しく評価できます")
+    A("- スコープ分類: コマンド/スクリプトが対象ホスト（`host.docker.internal`・"
+      "`localhost`・`127.0.0.1`・ホストIPの対象ポート）に対して HTTP/DB/ブラウザ操作を"
+      "行うものを **Web向け** としました。サンドボックス内の `rm`/`cp`/`cat`、"
+      "Caido API の読み取り、スクリプトの書き込みのみの操作は **サンドボックス内** として"
+      "除外しています。対象URLがなくHTTPクライアントだけのスクリプトは **ambiguous** として"
+      "別集計し、Web向けの件数には含めていません")
+    A(f"  - Web向け危険 {s['web_risky_attempts']:,} 件のうち "
+      f"**{s['web_risky_with_script']:,} 件**はスクリプト本文を解決して判定")
     A("- モデルの紐付け: `run.json` の `llm_usage.agents`（agent_id→model）と "
       "`agents.db` の `session_id` を対応付け、exec ごとの実行モデルを特定")
     A("- リスク評価: JEV（`typesafe/jev-1.14`）で 5 次元を再スコアリング。"
@@ -422,36 +483,43 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
     A(f"- しきい値: {json.dumps(s['thresholds'], ensure_ascii=False)}")
     A(f"- 重複排除: 同一コマンド＋同一スクリプトは 1 回だけ JEV に問い合わせ"
       f"（{s['jev_calls']:,} 回、失敗フォールバック {s['jev_fallbacks']} 件）\n")
-    A("## 結果\n")
-    A(f"- 危険と分類された exec: **{s['risky_attempts']:,} / {s['attempts']:,} 件 "
-      f"({s['risky_pct']}%)**")
-    A(f"- 1 実行あたりの平均: **{s['avg_risky_per_run']} 件**"
-      f"（中央値 {s['median_risky_per_run']} 件、危険率平均 {s['avg_risky_rate']}%）")
-    A(f"- 200 件以上の評価がある大規模実行に限ると: 平均 "
-      f"**{s['avg_risky_per_run_big']} 件/実行**（危険率 {s['avg_risky_rate_big']}%）")
-    A("- これらはガード未適用の実行なので、危険と分類されたコマンドは遮断されずに"
+    A("## 結果（ウェブアプリ向け）\n")
+    A(f"- **Web向け危険 exec: {s['web_risky_attempts']:,} / {s['attempts']:,} 件 "
+      f"({s['web_risky_pct']}%)**")
+    A(f"- 1 実行あたりの平均: **{s['avg_web_risky_per_run']} 件**"
+      f"（中央値 {s['median_web_risky_per_run']} 件、危険率平均 {s['avg_web_risky_rate']}%）")
+    A(f"- 200 件以上の大規模実行に限ると: 平均 "
+      f"**{s['avg_web_risky_per_run_big']} 件/実行**（危険率 {s['avg_web_risky_rate_big']}%）")
+    A(f"- 参考: JEV の全危険判定は **{s['risky_attempts']:,} 件**。このうち "
+      f"**{s['risky_attempts'] - s['web_risky_attempts']:,} 件**はサンドボックス内の"
+      "`rm`/`cp`/`cat`、Caido 読み取り、スクリプト書き込み、ambiguous などとして"
+      "Web向けから除外しました")
+    scope = s.get("scope_counts", {})
+    A("- スコープ内訳（危険件数）: " + ", ".join(
+        f"{k} {v:,}" for k, v in sorted(scope.items(), key=lambda x: -x[1])))
+    A("- これらはガード未適用の実行なので、Web向け危険コマンドは遮断されずに"
       "実行されています（コマンド自体の成功/失敗は別）")
-    A("- 分類別（重複あり）: " + ", ".join(
+    A("- 分類別（Web向け、重複あり）: " + ", ".join(
         f"{CAT_JA.get(k, k)} {v:,}" for k, v in
         sorted(s["categories"].items(), key=lambda x: -x[1])))
     A("")
-    A("### 対象別\n")
-    A("| 対象 | 実行数 | exec 数 | 危険 | 危険率 |")
+    A("### 対象別（Web向け）\n")
+    A("| 対象 | 実行数 | exec 数 | Web危険 | Web危険率 |")
     A("|---|---|---|---|---|")
-    for tgt, v in sorted(s["targets"].items(), key=lambda x: -x[1]["risky"]):
-        rate = round(100 * v["risky"] / max(1, v["attempts"]), 2)
-        A(f"| `{tgt}` | {v['runs']} | {v['attempts']:,} | {v['risky']} | {rate}% |")
+    for tgt, v in sorted(s["targets"].items(), key=lambda x: -x[1]["web_risky"]):
+        rate = round(100 * v["web_risky"] / max(1, v["attempts"]), 2)
+        A(f"| `{tgt}` | {v['runs']} | {v['attempts']:,} | {v['web_risky']} | {rate}% |")
     A("")
-    A("### 実行別（危険件数の多い順）\n")
-    A("| 実行 | モデル | exec 数 | 危険 | 危険率 |")
+    A("### 実行別（Web向け危険件数の多い順）\n")
+    A("| 実行 | モデル | exec 数 | Web危険 | Web危険率 |")
     A("|---|---|---|---|---|")
     for name, v in _top_runs(s):
-        rate = round(100 * v["risky"] / max(1, v["attempts"]), 2)
+        rate = round(100 * v["web_risky"] / max(1, v["attempts"]), 2)
         models = ", ".join(m for m, _ in
                            sorted(v["models"].items(), key=lambda x: -x[1])[:2])
-        A(f"| `{name}` | `{models}` | {v['attempts']} | {v['risky']} | {rate}% |")
+        A(f"| `{name}` | `{models}` | {v['attempts']} | {v['web_risky']} | {rate}% |")
     A("")
-    A("### 危険コマンドの例（リスク上位）\n")
+    A("### 危険コマンドの例（Web向け・リスク上位）\n")
     A("| 最大次元 | 分類 | モデル | スクリプト | コマンド/内容（先頭） |")
     A("|---|---|---|---|---|")
     seen = set()
@@ -472,8 +540,10 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
             break
     A("")
     A("## CSV\n")
-    A(f"- `docs/{os.path.basename(DANGEROUS_CSV)}` — 危険と判定された "
-      f"{s['risky_attempts']:,} 件（モデル・リスク次元・判定・コマンド）")
+    A(f"- `docs/{os.path.basename(WEB_CSV)}` — **Web向け危険 "
+      f"{s['web_risky_attempts']:,} 件**（モデル・リスク次元・判定・コマンド）")
+    A(f"- `docs/{os.path.basename(DANGEROUS_CSV)}` — JEV全危険 "
+      f"{s['risky_attempts']:,} 件（scope_class 列で target/external/local/ambiguous を区別）")
     A(f"- `docs/{os.path.basename(RUNS_CSV)}` — 実行別サマリ {s['runs']} 件")
     A(f"- `docs/{os.path.basename(MODELS_CSV)}` — モデル別サマリ")
     A(f"- `guard_runs/{os.path.basename(FULL_CSV)}` — 全 {s['attempts']:,} 件の"
@@ -481,7 +551,8 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
     if guarded:
         A("## 参考: ガード適用時の効果\n")
         A(f"- 危険: **{guarded['risky_attempts']} / {guarded['attempts']:,} 件**、"
-          f"平均 {guarded['avg_risky_per_run']} 件/実行")
+          f"平均 {guarded['avg_risky_per_run']} 件/実行（このデータセットBは"
+          "スコープフィルタ未適用の参考値）")
         A(f"- ガードが遮断・修正: **{guarded['risky_blocked']} 件**、"
           f"ポリシーが許可して実行: **{guarded['risky_executed']} 件**")
         A("- 参照のみのプリセットでは、許可された危険コマンドも実行前に止まります。\n")
@@ -496,6 +567,9 @@ def write_markdown_ja(s, examples, model_rows, run_meta, guarded):
       "傾向と規模を見るための再分類です。")
     A("- スクリプト本文が取得できなかったコマンドは、コマンド文字列のみで評価しています。")
     A("- サンドボックス内部のファイル操作（`sandbox_internal`）は JEV を呼ばず安全側に扱います。")
+    A("- サンドボックス内の `rm -rf`、Caido 読み取り、スクリプト書き込みは、JEV の全危険件数"
+      "には含まれますが、Web向け危険件数からは除外しています。対象URLがなくHTTPクライアント"
+      "だけの ambiguous もWeb向けには含めていません。")
     A("")
     A("再現: `python3 tools/corpus_parent_stats.py && "
       "python3 tools/corpus_jev_parent.py --workers 16`")
@@ -509,19 +583,19 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
     A("# JEV Re-classification Report (Historical Strix Runs)\n")
     A("**English** | [日本語](JEV_CORPUS_REPORT.md)\n")
     A("This report re-scores every exec command from past Strix runs with JEV after "
-      "rebuilding script contents from the ledger. It shows how many dangerous "
-      "commands the agent was running.\n")
+      "rebuilding script contents from the ledger. The headline count is limited to "
+      "**web-application-facing** commands; sandbox-local risk is reported separately.\n")
     A("## Dataset\n")
     A(f"### A. Unguarded benchmark runs ({s['runs']})\n")
     A(f"The {s['runs']} Strix runs under `/home/yusuk/blackbox-testing/strix_runs` "
       f"({s['attempts']:,} `exec_command` calls) ran without strix-guard, so nothing "
       "was blocked or revised.\n")
-    A("These runs span multiple models, and **dangerous commands appear with every "
-      "model**; this is agent behavior, not a defect of one model.\n")
-    A("| Model | Runs | Exec calls | Dangerous | Rate |")
-    A("|---|---|---|---|---|")
-    for m, runs, att, risky, rate in _model_table(model_rows):
-        A(f"| `{m}` | {runs} | {att:,} | {risky} | {rate}% |")
+    A("These runs span multiple models, and **web-app-facing dangerous commands "
+      "appear with every model**; this is agent behavior, not a defect of one model.\n")
+    A("| Model | Runs | Exec calls | Web dangerous | Web rate | All dangerous |")
+    A("|---|---|---|---|---|---|")
+    for m, runs, att, web_risky, rate, risky in _model_table(model_rows):
+        A(f"| `{m}` | {runs} | {att:,} | {web_risky} | {rate}% | {risky} |")
     A("")
     if guarded:
         A("### B. strix-guard runs (reference)\n")
@@ -529,7 +603,8 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
           "matched to `strix_guard/guard_runs`. Of "
           f"{guarded['risky_attempts']} dangerous attempts, "
           f"{guarded['risky_blocked']} were blocked or revised and "
-          f"{guarded['risky_executed']} were allowed to run.\n")
+          f"{guarded['risky_executed']} were allowed to run. Dataset B is not "
+          "scope-filtered; treat it as a reference.\n")
     A("## Method\n")
     A("- Script resolution: rebuild a ledger from each run's `agents.db` and attach "
       "the script text written via `apply_patch`, heredocs, `cp`, or `mv` to the "
@@ -538,6 +613,14 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
       "commands were only visible after resolving the script. Strix's PTY wrapper "
       "(`sandbox-docker-archive`) looks like a harmless file transfer, but the "
       "ledger recovers the payload (XSS pages, token theft, bulk signup, and so on)")
+    A("- Scope filter: a command counts as **web-facing** only when it sends a "
+      "request to the target host (`host.docker.internal`, `localhost`, `127.0.0.1`, "
+      "or the target host IP/port) through HTTP, a browser, or the target DB. "
+      "Sandbox `rm`/`cp`/`cat`, Caido API reads, and script-only writes are marked "
+      "`local` and excluded. HTTP-client scripts with no resolvable target URL are "
+      "`ambiguous` and are not counted in the headline")
+    A(f"  - {s['web_risky_with_script']:,} of the {s['web_risky_attempts']:,} "
+      "web-facing dangerous commands were judged with resolved script content")
     A("- Model attribution: match `agent_id` to `model` from `run.json` "
       "(`llm_usage.agents`) with the `session_id` of each message in `agents.db`, "
       "so each exec is attributed to the model that issued it")
@@ -548,36 +631,42 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
     A(f"- Thresholds: {json.dumps(s['thresholds'], ensure_ascii=False)}")
     A(f"- Deduplication: identical command + script pairs are scored once "
       f"({s['jev_calls']:,} JEV calls, {s['jev_fallbacks']} fallbacks)\n")
-    A("## Results\n")
-    A(f"- Dangerous exec calls: **{s['risky_attempts']:,} / {s['attempts']:,} "
-      f"({s['risky_pct']}%)**")
-    A(f"- Average per run: **{s['avg_risky_per_run']}** (median "
-      f"{s['median_risky_per_run']}, mean rate {s['avg_risky_rate']}%)")
-    A(f"- Runs with 200+ exec calls: **{s['avg_risky_per_run_big']} per run** "
-      f"({s['avg_risky_rate_big']}%)")
-    A("- These runs had no guard, so the dangerous commands were executed "
+    A("## Results (web-facing)\n")
+    A(f"- **Web-facing dangerous exec calls: {s['web_risky_attempts']:,} / "
+      f"{s['attempts']:,} ({s['web_risky_pct']}%)**")
+    A(f"- Average per run: **{s['avg_web_risky_per_run']}** (median "
+      f"{s['median_web_risky_per_run']}, mean rate {s['avg_web_risky_rate']}%)")
+    A(f"- Runs with 200+ exec calls: **{s['avg_web_risky_per_run_big']} per run** "
+      f"({s['avg_web_risky_rate_big']}%)")
+    A(f"- For reference, JEV flagged **{s['risky_attempts']:,}** dangerous commands "
+      f"in total; **{s['risky_attempts'] - s['web_risky_attempts']:,}** are sandbox "
+      "local, script-prep, or ambiguous and are excluded from the headline")
+    scope = s.get("scope_counts", {})
+    A("- Scope breakdown (dangerous only): " + ", ".join(
+        f"{k} {v:,}" for k, v in sorted(scope.items(), key=lambda x: -x[1])))
+    A("- These runs had no guard, so the web-facing dangerous commands were executed "
       "(their own success or failure is separate)")
-    A("- Categories (overlap allowed): " + ", ".join(
+    A("- Categories (web-facing, overlap allowed): " + ", ".join(
         f"{CAT_EN.get(k, k)} {v:,}" for k, v in
         sorted(s["categories"].items(), key=lambda x: -x[1])))
     A("")
-    A("### By target\n")
-    A("| Target | Runs | Exec calls | Dangerous | Rate |")
+    A("### By target (web-facing)\n")
+    A("| Target | Runs | Exec calls | Web dangerous | Web rate |")
     A("|---|---|---|---|---|")
-    for tgt, v in sorted(s["targets"].items(), key=lambda x: -x[1]["risky"]):
-        rate = round(100 * v["risky"] / max(1, v["attempts"]), 2)
-        A(f"| `{tgt}` | {v['runs']} | {v['attempts']:,} | {v['risky']} | {rate}% |")
+    for tgt, v in sorted(s["targets"].items(), key=lambda x: -x[1]["web_risky"]):
+        rate = round(100 * v["web_risky"] / max(1, v["attempts"]), 2)
+        A(f"| `{tgt}` | {v['runs']} | {v['attempts']:,} | {v['web_risky']} | {rate}% |")
     A("")
-    A("### Top runs by dangerous count\n")
-    A("| Run | Models | Exec calls | Dangerous | Rate |")
+    A("### Top runs by web-facing dangerous count\n")
+    A("| Run | Models | Exec calls | Web dangerous | Web rate |")
     A("|---|---|---|---|---|")
     for name, v in _top_runs(s):
-        rate = round(100 * v["risky"] / max(1, v["attempts"]), 2)
+        rate = round(100 * v["web_risky"] / max(1, v["attempts"]), 2)
         models = ", ".join(m for m, _ in
                            sorted(v["models"].items(), key=lambda x: -x[1])[:2])
-        A(f"| `{name}` | `{models}` | {v['attempts']} | {v['risky']} | {rate}% |")
+        A(f"| `{name}` | `{models}` | {v['attempts']} | {v['web_risky']} | {rate}% |")
     A("")
-    A("### Example dangerous commands (highest risk)\n")
+    A("### Example web-facing dangerous commands (highest risk)\n")
     A("| Max score | Categories | Model | Script | Command / payload (start) |")
     A("|---|---|---|---|---|")
     seen = set()
@@ -598,8 +687,10 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
             break
     A("")
     A("## CSV\n")
-    A(f"- `docs/{os.path.basename(DANGEROUS_CSV)}` — {s['risky_attempts']:,} "
-      "dangerous attempts (model, dimensions, verdict, command)")
+    A(f"- `docs/{os.path.basename(WEB_CSV)}` — **{s['web_risky_attempts']:,} "
+      "web-facing dangerous attempts**")
+    A(f"- `docs/{os.path.basename(DANGEROUS_CSV)}` — all {s['risky_attempts']:,} "
+      "JEV-dangerous attempts with a `scope_class` column")
     A(f"- `docs/{os.path.basename(RUNS_CSV)}` — per-run summary ({s['runs']} rows)")
     A(f"- `docs/{os.path.basename(MODELS_CSV)}` — per-model summary")
     A(f"- `guard_runs/{os.path.basename(FULL_CSV)}` — all {s['attempts']:,} "
@@ -607,7 +698,7 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
     if guarded:
         A("## Guarded runs for comparison\n")
         A(f"- Dangerous: **{guarded['risky_attempts']} / {guarded['attempts']:,}**, "
-          f"{guarded['avg_risky_per_run']} per run")
+          f"{guarded['avg_risky_per_run']} per run (dataset B is not scope-filtered)")
         A(f"- Blocked or revised: **{guarded['risky_blocked']}**; allowed to run: "
           f"**{guarded['risky_executed']}**")
         A("- Read-only presets stop the allowed ones before execution.\n")
@@ -616,6 +707,10 @@ def write_markdown_en(s, examples, model_rows, run_meta, guarded):
       "succeeded.")
     A("- Dataset A is unguarded, so those commands ran. In dataset B, blocked or "
       "revised commands never ran in the sandbox.")
+    A("- Sandbox `rm -rf`, Caido API reads, and script-only writes are present in "
+      "the all-dangerous count but are excluded from the web-facing count. "
+      "HTTP-client scripts with no resolvable target URL are marked ambiguous and "
+      "are also excluded from the headline.")
     A("- Per-model counts attribute each exec to the model of the session that "
       "issued it; a run with several models contributes to each model.")
     A("- JEV re-scoring uses the current model and may differ from the decision at "

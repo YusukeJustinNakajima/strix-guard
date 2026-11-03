@@ -19,7 +19,8 @@ def load_api_key() -> str | None:
     cfg = os.path.expanduser("~/.strix/cli-config.json")
     if os.path.exists(cfg):
         try:
-            return json.load(open(cfg, encoding="utf-8")).get("env", {}).get("LLM_API_KEY")
+            env = json.load(open(cfg, encoding="utf-8")).get("env", {})
+            return env.get("LLM_API_KEY") or env.get("OPENAI_API_KEY")
         except Exception:
             return None
     return None

@@ -46,13 +46,13 @@ Examples of the asymmetry:
 
 The asymmetry is not hypothetical. We re-scored every exec attempt from 136 earlier Strix benchmark runs (39,830 commands, with script contents rebuilt from the ledger) using JEV. Those runs had no guard in place, so the commands below ran:
 
-- **2,740 commands (6.9%)** crossed the danger thresholds: 1,965 exposed data, 433 were destructive, 417 imposed high load, 10 attacked third parties, and 1 left the declared scope (categories can overlap).
-- That is an average of **20.1 dangerous commands per run** (median 16); runs with 200+ commands averaged **26.1**.
-- **1,062** of the dangerous commands were only visible after the ledger rebuilt the script hidden inside a PTY file-transfer wrapper (token theft, bulk signup, and similar payloads).
-- The 136 runs used several models — `deepseek-v4.1-flash`, `glm-5.3-flash`, `mimo-v2.6-pro`, `mimo-v2.6-flash`, `qwen3.8-*`, and others — and dangerous commands appear with every model. This is agent behavior, not a defect of one model.
-- With the guard in place the picture changes: across 29 guarded runs, 115 dangerous attempts were logged; the guard blocked or revised 81, and 34 ran because the selected policy permitted them. `reference_only` stops those before execution.
+- **2,090 web-facing commands (5.25%)** crossed the danger thresholds: 1,471 exposed target data, 323 were destructive to the target, 365 imposed high load, 9 attacked third parties, and 1 left the declared scope (categories can overlap). JEV flagged 2,740 commands in total; the other 650 are sandbox-local (428), ambiguous (221), or external (1), including `rm -rf` inside the sandbox, and are excluded here.
+- That is an average of **15.4 web-facing dangerous commands per run** (median 13); runs with 200+ commands averaged **19.7**.
+- **855** of the web-facing dangerous commands were only visible after the ledger rebuilt the script hidden inside a PTY file-transfer wrapper (token theft, bulk signup, and similar payloads).
+- The 136 runs used several models — `deepseek-v4.1-flash`, `glm-5.3-flash`, `mimo-v2.6-pro`, `mimo-v2.6-flash`, `qwen3.8-*`, and others — and **web-facing dangerous commands appear with every model**. This is agent behavior, not a defect of one model.
+- With the guard in place the picture changes: across 29 guarded runs, 115 dangerous attempts were logged; the guard blocked or revised 81, and 34 ran because the selected policy permitted them. `reference_only` stops those before execution. (This guarded dataset is not scope-filtered.)
 
-Left alone, the agent routinely reads other users' data and pushes load at the target. That is why enforcement has to live outside the model, in the exec gate and the HTTP sidecar. Method and breakdown: [Japanese report](docs/JEV_CORPUS_REPORT.md) / [English report](docs/JEV_CORPUS_REPORT.en.md). Data: [dangerous commands CSV](docs/jev_corpus_dangerous.csv), [per-run CSV](docs/jev_corpus_runs.csv), [per-model CSV](docs/jev_corpus_models.csv). The full 39,830-row classification is generated at `guard_runs/jev_corpus_classification.csv` (not committed).
+Left alone, the agent routinely reads other users' data and pushes load at the target. That is why enforcement has to live outside the model, in the exec gate and the HTTP sidecar. Method and breakdown: [Japanese report](docs/JEV_CORPUS_REPORT.md) / [English report](docs/JEV_CORPUS_REPORT.en.md). Data: [web-facing CSV](docs/jev_corpus_web_risk.csv), [all dangerous CSV with scope](docs/jev_corpus_dangerous.csv), [per-run CSV](docs/jev_corpus_runs.csv), [per-model CSV](docs/jev_corpus_models.csv). The full 39,830-row classification is generated at `guard_runs/jev_corpus_classification.csv` (not committed).
 
 ## Solution
 
@@ -589,5 +589,5 @@ Highlights:
 - [docs/TEST_REPORT.en.md](docs/TEST_REPORT.en.md) — English version of the test report
 - [docs/JEV_CORPUS_REPORT.md](docs/JEV_CORPUS_REPORT.md) — JEV re-classification of historical exec commands (Japanese)
 - [docs/JEV_CORPUS_REPORT.en.md](docs/JEV_CORPUS_REPORT.en.md) — English version of the JEV report
-- [docs/jev_corpus_dangerous.csv](docs/jev_corpus_dangerous.csv), [docs/jev_corpus_runs.csv](docs/jev_corpus_runs.csv), [docs/jev_corpus_models.csv](docs/jev_corpus_models.csv) — classification data
+- [docs/jev_corpus_web_risk.csv](docs/jev_corpus_web_risk.csv), [docs/jev_corpus_dangerous.csv](docs/jev_corpus_dangerous.csv), [docs/jev_corpus_runs.csv](docs/jev_corpus_runs.csv), [docs/jev_corpus_models.csv](docs/jev_corpus_models.csv) — classification data
 - [DESIGN.md](DESIGN.md) — design notes and background
