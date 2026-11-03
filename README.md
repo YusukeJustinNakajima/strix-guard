@@ -254,16 +254,6 @@ The launcher prints the policy SHA-256 prefix at startup. The same policy and ta
 - Sidecar start error: recorded in the audit. The container's proxy still points at the sidecar, so target requests through it will fail until the sidecar is available. Treat that run as not HTTP-enforced.
 - Non-TTY exec output: Strix may return empty output even for allowed commands. The exit code still distinguishes a block from a success. TTY commands show the text.
 
-## Effectiveness validation
-
-> **TODO:** this section is a plan, not a completed validation. The single-run experiments so far are smoke tests and are not sufficient to claim general effectiveness.
-
-The guard is useful only if it preserves detection quality while reducing risky behavior. Validate three things:
-
-- **Accuracy degradation.** TODO: compare unguarded and guarded runs on the same target and model, with enough repetitions (for example 5 runs per mode), and report pooled TP/FP/FN, precision, recall, F1, severity/CWE coverage, and run-to-run variance per application. Do not conclude from a single pair of runs.
-- **What was blocked or revised.** TODO: summarize policy-rule blocks and revised commands from `verdicts.jsonl`, with the reason (method, upload, SQL write, egress, load, data exposure), the constraints applied, and whether the agent retried successfully.
-- **Runtime impact.** TODO: compare wall-clock time and tool-call counts, separating the guard's decision latency (JEV/adjudication) from the intended scan throttling (lower parallelism, rate, or request caps). Report medians and ranges, not just one run.
-
 ## Usage
 
 ### Requirements
