@@ -283,7 +283,7 @@ Initial controlled A/B runs compare plain Strix with the guard in `auto` mode (`
 | `deepseek-v4.1-flash` | 22 min | 31 min | 1 h 51 min → 2 h 39 min |
 | `mimo-v2.6-flash` | 1 h 25 min | 2 h 30 min | 7 h 08 min → 12 h 30 min |
 
-Deepseek's guard retains baseline precision and improves recall; mimo's guard has a small F1 change while recall improves. The wall-clock increase (22→31 min for deepseek, 1 h 25 min→2 h 30 min for mimo) follows from the evaluations, revisions, and capped scans above. One guard run per model was carried over from an earlier experiment (older broad JEV prompt); the other runs used the target-scoped prompt.
+Deepseek's guard retains baseline precision. The recall differences (36→38 findings for deepseek and 35→36 for mimo, out of 60) are one to two findings across five runs each and are not attributable to the guard; the appropriate conclusion is that **no recall degradation was observed**. Mimo's F1 change is correspondingly small. The wall-clock increase (22→31 min for deepseek, 1 h 25 min→2 h 30 min for mimo) follows from the evaluations, revisions, and capped scans above. One guard run per model was carried over from an earlier experiment (older broad JEV prompt); the other runs used the target-scoped prompt.
 
 ## Usage
 
