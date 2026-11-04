@@ -258,7 +258,7 @@ sequenceDiagram
 
 テスト対象は、意図的に脆弱性を含む銀行アプリケーション [vuln-bank](https://github.com/Commando-X/vuln-bank) をローカルで改変したものです。モデルが学習時に上流プロジェクトを見ている可能性があるため、実行に使用したコピーでは、元の外観（UI/ブランド）やベンチマークと分かる文字列を削除・変更しています。したがって、公開ベンチマークの外観に依存しない未知のインスタンスに対する挙動を評価しています。
 
-`vuln-bank-modified` に対する初期の統制A/B実行です。plain Strixとガードの`auto`モード（`full`ポリシー、`benchmark`環境、`standard`スキャン）を比較し、`deepseek-v4.1-flash`と`mimo-v2.6-flash`を各モード5回ずつ実行しました。baselineは既存実験からインポートしています。下表は5回分のTP/FP/FNを合算し、RecallはユニークGTの検出率で計算した累計値です。このターゲット・設定に対する結果であり、一般的な有効性の主張ではありません。
+`vuln-bank-modified` に対する初期の統制A/B実行です。plain Strixとガードの`auto`モード（`full`ポリシー、`benchmark`環境、`standard`スキャン）を比較し、`deepseek-v4.1-flash`と`mimo-v2.6-flash`を各モード5回ずつ実行しました。baselineは既存実験からインポートしています。下表は5回分のTP/FP/FNを合算し、RecallはユニークGTの検出率で計算した累計値です。このターゲット・設定に対する簡易検証にすぎません。
 
 | モデル | モード | Precision | Recall | F1 |
 |---|---|---:|---:|---:|
@@ -283,7 +283,7 @@ sequenceDiagram
 | `deepseek-v4.1-flash` | 22分 | 31分 | 1時間51分 → 2時間39分 |
 | `mimo-v2.6-flash` | 1時間25分 | 2時間30分 | 7時間08分 → 12時間30分 |
 
-deepseekのguardはbaselineと同じPrecisionを維持しRecallが向上、mimoのguardはF1がわずかに変化しRecallが向上しています。実行時間の増加（deepseek 22→31分、mimo 1時間25分→2時間30分）は、上記の評価・REVISE・スキャン上限によるもので自然です。各モデルのguard run 1回は前回実験からの引き継ぎで、旧来の広いJEVプロンプトを使用しています。残りのrunはターゲット限定プロンプトです。一般的な有効性の結論には、より大規模でペアの揃った評価が必要です。
+deepseekのguardはbaselineと同じPrecisionを維持しRecallが向上、mimoのguardはF1がわずかに変化しRecallが向上しています。実行時間の増加（deepseek 22→31分、mimo 1時間25分→2時間30分）は、上記の評価・REVISE・スキャン上限によるもので自然です。各モデルのguard run 1回は前回実験からの引き継ぎで、旧来の広いJEVプロンプトを使用しています。残りのrunはターゲット限定プロンプトです。
 
 ## 使い方
 

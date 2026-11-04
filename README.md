@@ -258,7 +258,7 @@ The launcher prints the policy SHA-256 prefix at startup. The same policy and ta
 
 The test target was a locally modified copy of [vuln-bank](https://github.com/Commando-X/vuln-bank), an intentionally vulnerable banking application. Because the model may have seen the upstream project during training, the copy used for these runs had the original UI/branding and benchmark-identifying strings removed or changed. The evaluation therefore measures behavior against an unfamiliar instance rather than the public benchmark appearance.
 
-Initial controlled A/B runs compare plain Strix with the guard in `auto` mode (`full` policy, `benchmark` environment, `standard` scan). Each mode used five runs for `deepseek-v4.1-flash` and `mimo-v2.6-flash`; baseline runs were imported from existing experiments. Metrics are pooled across the five runs and recall uses unique GT coverage. This is evidence for this target and setup, not a general claim.
+Initial controlled A/B runs compare plain Strix with the guard in `auto` mode (`full` policy, `benchmark` environment, `standard` scan). Each mode used five runs for `deepseek-v4.1-flash` and `mimo-v2.6-flash`; baseline runs were imported from existing experiments. Metrics are pooled across the five runs and recall uses unique GT coverage. This is only a preliminary validation for this target and setup.
 
 | Model | Mode | Precision | Recall | F1 |
 |---|---|---:|---:|---:|
@@ -283,7 +283,7 @@ Initial controlled A/B runs compare plain Strix with the guard in `auto` mode (`
 | `deepseek-v4.1-flash` | 22 min | 31 min | 1 h 51 min → 2 h 39 min |
 | `mimo-v2.6-flash` | 1 h 25 min | 2 h 30 min | 7 h 08 min → 12 h 30 min |
 
-Deepseek's guard retains baseline precision and improves recall; mimo's guard has a small F1 change while recall improves. The wall-clock increase (22→31 min for deepseek, 1 h 25 min→2 h 30 min for mimo) follows from the evaluations, revisions, and capped scans above. One guard run per model was carried over from an earlier experiment (older broad JEV prompt); the other runs used the target-scoped prompt. These results do not establish general effectiveness; larger and paired evaluations are still needed.
+Deepseek's guard retains baseline precision and improves recall; mimo's guard has a small F1 change while recall improves. The wall-clock increase (22→31 min for deepseek, 1 h 25 min→2 h 30 min for mimo) follows from the evaluations, revisions, and capped scans above. One guard run per model was carried over from an earlier experiment (older broad JEV prompt); the other runs used the target-scoped prompt.
 
 ## Usage
 
