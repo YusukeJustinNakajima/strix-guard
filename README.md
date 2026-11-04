@@ -254,6 +254,29 @@ The launcher prints the policy SHA-256 prefix at startup. The same policy and ta
 - Sidecar start error: recorded in the audit. The container's proxy still points at the sidecar, so target requests through it will fail until the sidecar is available. Treat that run as not HTTP-enforced.
 - Non-TTY exec output: Strix may return empty output even for allowed commands. The exit code still distinguishes a block from a success. TTY commands show the text.
 
+## Effectiveness validation
+
+Initial controlled A/B runs on `vuln-bank-modified` compare plain Strix with the guard in `auto` mode (`full` policy, `benchmark` environment, `standard` scan). Each mode used five runs for `deepseek-v4.1-flash` and `mimo-v2.6-flash`; the baseline runs were imported from existing experiments. The table reports cumulative TP/FP/FN pooled across the five runs and unique GT coverage; it is evidence for this target and setup, not a general claim.
+
+| Model | Variant | Precision | Recall | F1 |
+|---|---|---:|---:|---:|
+| `deepseek-v4.1-flash` | baseline | 96.94% | 60.00% | 74.12% |
+| `deepseek-v4.1-flash` | guard, raw | 75.00% | 63.33% | 68.67% |
+| `deepseek-v4.1-flash` | guard, dependency CVEs excluded | 96.94% | 63.33% | 76.61% |
+| `mimo-v2.6-flash` | baseline | 96.77% | 58.33% | 72.79% |
+| `mimo-v2.6-flash` | guard | 91.67% | 60.00% | 72.53% |
+
+**Excluded from the adjusted deepseek row.** One deepseek guard run reported 32 dependency-CVE findings while enumerating installed packages: Flask (2), flask-cors (5), PyJWT (12), python-dotenv (1), requests (3), and Werkzeug (9). Those CVE-titled findings were removed and the remaining 18 findings re-evaluated with the same ground truth and matcher; all other runs were unchanged. The raw guard row is shown so the scope adjustment is visible. Mimo had no dependency-CVE exclusion; its pooled false positives are mostly duplicate or variant SQL-injection reports.
+
+**Guard behavior and runtime.** The guard evaluated 5,955 actions for deepseek (1 block, 19 revisions) and 78,864 for mimo (1 block, 102 revisions). Revisions typically capped brute-force or scanning volume, required script review, or removed destructive calls. Wall-clock per scan, excluding target reset and evaluation:
+
+| Model | Baseline mean | Guard mean | Five-run total |
+|---|---:|---:|---:|
+| `deepseek-v4.1-flash` | 22 min | 31 min | 1 h 51 min → 2 h 39 min |
+| `mimo-v2.6-flash` | 1 h 25 min | 2 h 30 min | 7 h 08 min → 12 h 30 min |
+
+Deepseek's raw precision is dominated by the dependency-CVE run; after the scope adjustment the guard retains baseline precision and improves recall. The raw A/B report was DEGRADED. Mimo's pooled F1 is essentially unchanged; its mean-based A/B report recorded PASS (precision -4.31 pp, recall +3.00 pp, F1 +2.61 pp). The report verdict uses the mean over runs, while the table pools findings across runs. One guard run for deepseek and mimo was carried over from the earlier experiment and used the older broad JEV prompt; the remaining runs used the target-scoped prompt. These results do not establish general effectiveness; larger and paired evaluations are still needed.
+
 ## Usage
 
 ### Requirements

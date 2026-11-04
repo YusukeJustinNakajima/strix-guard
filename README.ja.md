@@ -256,13 +256,26 @@ sequenceDiagram
 
 ## 有効性の検証
 
-> **TODO:** この節は計画であり、検証は未完了です。現時点の単発実行はスモークテストであり、一般的な有効性を主張するには不十分です。
+`vuln-bank-modified` に対する初期の統制A/B実行です。plain Strixとガードの`auto`モード（`full`ポリシー、`benchmark`環境、`standard`スキャン）を比較し、`deepseek-v4.1-flash`と`mimo-v2.6-flash`を各モード5回ずつ実行しました。baselineは既存実験からインポートしています。下表は5回分のTP/FP/FNを合算し、ユニークGTの検出率でRecallを計算した累計値です。このターゲット・設定に対する結果であり、一般的な有効性の主張ではありません。
 
-ガードは、危険な振る舞いを減らしつつ検出品質を維持できて初めて有効です。次の3点を検証します。
+| モデル | 条件 | Precision | Recall | F1 |
+|---|---|---:|---:|---:|
+| `deepseek-v4.1-flash` | baseline | 96.94% | 60.00% | 74.12% |
+| `deepseek-v4.1-flash` | guard（raw） | 75.00% | 63.33% | 68.67% |
+| `deepseek-v4.1-flash` | guard（依存CVE除外） | 96.94% | 63.33% | 76.61% |
+| `mimo-v2.6-flash` | baseline | 96.77% | 58.33% | 72.79% |
+| `mimo-v2.6-flash` | guard | 91.67% | 60.00% | 72.53% |
 
-- **精度劣化**: TODO: 同一ターゲット・同一モデルでガードあり/なしを十分な回数（例: 各モード5回）実行し、アプリケーション別に TP/FP/FN の合算、Precision、Recall、F1、Severity/CWE カバレッジ、実行間のばらつきを報告する。1組の比較だけで結論を出さない。
-- **ブロック/リバイスの内容**: TODO: `verdicts.jsonl` から policy_rule のブロックと revise されたコマンドを、理由（メソッド、アップロード、SQL書き込み、外部通信、負荷、データ露出）、適用した制約、再試行の成否とともに整理する。
-- **実行時間への影響**: TODO: wall-clock とツールコール数を比較し、ガードの判定レイテンシ（JEV/裁定）と、意図的なスキャン制限（並列度・レート・リクエスト上限）を分けて報告する。単発ではなく中央値と範囲を示す。
+**deepseekの調整で除外したもの。** guardの1 runで、インストール済みパッケージの列挙により32件の依存CVEレポートが出ました（Flask 2件、flask-cors 5件、PyJWT 12件、python-dotenv 1件、requests 3件、Werkzeug 9件）。CVEタイトルのfindingsを除外し、残り18件を同じGT・matcherで再評価しました。他のrunは変更していません。rawのguard行も残し、除外の影響が分かるようにしています。mimoは依存CVEの除外なし。mimoのFPは主にSQLiの重複・変種レポートです。
+
+**ガードの挙動と実行時間。** 5 run合計で、deepseekは5,955 evaluations（BLOCK 1、REVISE 19）、mimoは78,864 evaluations（BLOCK 1、REVISE 102）。REVISEは主にブルートフォースやスキャン量の上限、スクリプト内容の確認、破壊的呼び出しの削除でした。実行時間（target resetと評価を除く1 scanあたり）:
+
+| モデル | baseline 平均 | guard 平均 | 5 run合計 |
+|---|---:|---:|---:|
+| `deepseek-v4.1-flash` | 22分 | 31分 | 1時間51分 → 2時間39分 |
+| `mimo-v2.6-flash` | 1時間25分 | 2時間30分 | 7時間08分 → 12時間30分 |
+
+deepseekのraw Precisionは依存CVEのrunに支配されており、除外後はbaseline同等のPrecisionを維持しつつRecallが向上します。rawのA/BレポートはDEGRADEDでした。mimoの累計F1はほぼ同等で、平均ベースのA/BレポートはPASS（Precision -4.31pp、Recall +3.00pp、F1 +2.61pp）でした。A/Bレポートはrun平均、表はfindingsの合算です。deepseekとmimoのguard run 1は前回実験から引き継いだもので、旧来の広いJEVプロンプトを使用しています。残りのrunはターゲット限定プロンプトです。一般的な有効性の結論には、より大規模でペアの揃った評価が必要です。
 
 ## 使い方
 
