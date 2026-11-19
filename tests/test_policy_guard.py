@@ -49,6 +49,37 @@ class TestPolicyGuard(unittest.TestCase):
         self.assertEqual(self._kinds(
             "curl -X PUT http://host.docker.internal:5000/x", policy=self.full), [])
 
+    def test_denied_paths_block_in_full_preset(self):
+        p = resolve_policy("full")
+        p["http"]["denied_paths"] = ["/admin/delete_account", "/admin/delete_account/*"]
+        self.assertIn("policy_denied_path", self._kinds(
+            "curl -X POST http://host.docker.internal:5000/admin/delete_account/31", policy=p))
+        self.assertIn("policy_denied_path", self._kinds(
+            "curl 'http://host.docker.internal:5000/admin/delete_account?x=1'", policy=p))
+        self.assertEqual(self._kinds(
+            "curl -X POST http://host.docker.internal:5000/admin/delete_accounts", policy=p), [])
+
+    def test_denied_paths_match_script_literals(self):
+        p = resolve_policy("full")
+        p["http"]["denied_paths"] = ["/admin/delete_account/*"]
+        self.assertIn("policy_denied_path", self._kinds(
+            "python3 exploit.py",
+            "import requests\nrequests.post('/admin/delete_account/31')", policy=p))
+
+    def test_denied_paths_match_percent_encoded_path(self):
+        p = resolve_policy("full")
+        p["http"]["denied_paths"] = ["/admin/*"]
+        self.assertIn("policy_denied_path", self._kinds(
+            "curl http://host.docker.internal:5000/%61dmin/delete_account/31", policy=p))
+        self.assertIn("policy_denied_path", self._kinds(
+            "curl http://host.docker.internal:5000/%2Fadmin%2Fdelete_account", policy=p))
+
+    def test_denied_paths_do_not_apply_to_infra_hosts(self):
+        p = resolve_policy("full")
+        p["http"]["denied_paths"] = ["/graphql"]
+        self.assertEqual(self._kinds(
+            "curl -X POST http://127.0.0.1:48080/graphql", policy=p), [])
+
     def test_recon_blocks_exploit_tools(self):
         p = resolve_policy("recon")
         self.assertIn("policy_tool", self._kinds("sqlmap -u http://host.docker.internal:5000", policy=p))

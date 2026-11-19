@@ -56,6 +56,7 @@ def prepare(guard_policy: dict, strix_args: list) -> dict | None:
             hosts.append(str(h).lower())
     policy = {
         "allowed_methods": guard_policy["http"].get("allowed_methods") or ["GET"],
+        "denied_paths": guard_policy["http"].get("denied_paths") or [],
         "allowed_hosts": hosts,
         "infra_hosts": guard_policy.get("egress", {}).get("infra_hosts") or [],
         "max_requests": guard_policy["http"].get("max_requests") or 500,

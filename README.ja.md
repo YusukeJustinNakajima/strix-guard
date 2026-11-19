@@ -149,6 +149,7 @@ Strix の PTY ラッパーが存在する場合は、ラッパー構造を維持
 - **ファイルアップロード**: マルチパート送信やファイル転送フラグ
 - **SQL 更新・破壊クエリ**: `INSERT`、`UPDATE`、`DELETE FROM`、`DROP TABLE`、`TRUNCATE`、`ALTER TABLE` 等
 - **無許可の外部通信**: `egress.allow_external` が false の場合の外部宛て通信
+- **拒否エンドポイント**: `http.denied_paths` に一致するパス（HTTP サイドカーでも遮断）
 - **攻撃ツール**: `recon` プリセットにおける高負荷スキャナや攻撃エクスプロイトツール
 
 なお、Strix 自身の内部プロキシ（`127.0.0.1:48080`）は `egress.infra_hosts` に登録されています。このホスト宛ての通信のみを行うコマンドはエージェントのインフラ操作とみなされ、テスト対象向けメソッド制限の対象外となります。
@@ -199,6 +200,7 @@ python3 -c "import requests; m='PO'+'ST'; requests.request(m, 'http://host.docke
 - コンテナ内の `http_proxy`、`https_proxy`、`ALL_PROXY` 環境変数を引き受けてトラフィックを受信
 - Strix 既存の Caido プロキシ（`127.0.0.1:48080`）へ多段中継
 - 許可リストにある安全なメソッド（GET/HEAD等）とホストのみを通過させ、無許可リクエストには即座に 403 を返却
+- `http.denied_paths` に一致するリクエストパスを遮断
 - `max_requests`（件数上限）、`max_rps`（秒間レート）、`max_parallel`（同時並列数）の上限値を強制
 - ホスト側ディレクトリへ直接マウントされた領域に、JSONL 形式で全アクセスログを記録
 
@@ -465,6 +467,7 @@ python3 -m strix_guard.launcher \
   "http": {
     "enforce": true,
     "allowed_methods": ["GET", "HEAD", "OPTIONS"],
+    "denied_paths": ["/admin/delete_account", "/admin/delete_account/*"],
     "max_requests": 500,
     "max_parallel": 10,
     "max_rps": 10,
@@ -492,6 +495,8 @@ python3 -m strix_guard.launcher \
 3. `./guard_policy.json`
 4. `~/.config/strix-guard/policy.json`
 5. 選択したプリセット
+
+`http.denied_paths` は `/` で始まるシェル風の glob パターン（`fnmatch`）で指定します。マッチ時はパーセントデコードとドットセグメントの正規化を行い、クエリ文字列は含めません。exec ゲートはコマンドと復元したスクリプト内の絶対 URL とクォートされたパス文字列を、コンテナ内 HTTP サイドカーは実際のリクエストパスを検査します。`full` ではサイドカーが起動しないため、exec ゲートの検査だけが適用されます。動的に組み立てた URL も実行時に強制したい場合は `http.enforce` を true にしてください。CONNECT トンネル内部はパス検査できないため、このリストに依存する場合は `allow_connect` を false にしてください。
 
 未定義のキーが含まれていると、起動時にエラーになります。解決後のポリシーは `guard_runs/<run>/policy.json` に保存します。
 
@@ -636,7 +641,7 @@ guard_runs/run-20261101-145329/
 
 ## テスト
 
-ユニットテストおよび統合テスト（計120件）を用意しています。
+ユニットテストおよび統合テスト（計132件）を用意しています。
 
 ```bash
 python3 -m unittest discover -s tests

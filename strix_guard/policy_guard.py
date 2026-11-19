@@ -2,11 +2,13 @@
 
 reference_only / recon では、コマンドと解決済みスクリプト全文から
 非許可HTTPメソッド・アップロード・SQL書き込み・外部egressを検出して拒否する。
-full では追加検査なし（既存のPolicy Engineが担当）。
+full ではこれらを行わないが、http.denied_paths はプリセットに関係なく検査する。
 """
+import posixpath
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from fnmatch import fnmatchcase
+from urllib.parse import unquote, urlsplit
 
 from .policy import sandbox_internal
 
@@ -32,6 +34,7 @@ _TOOLS = {
     "recon": re.compile(r"(?<![\w-])(sqlmap|hydra|nikto|wpscan|nuclei)(?![\w-])", re.I),
 }
 _ANY_URL = re.compile(r"https?://([^\s'\"<>`)`]+)", re.I)
+_PATH_LITERAL = re.compile(r"['\"](/(?!/)[^'\"\s]*)['\"]")
 _OAST = re.compile(r"evil\.example|oast|collaborator|interact\.sh|rbndr|nip\.io|xip\.io", re.I)
 _IN_SCOPE = {"host.docker.internal", "127.0.0.1", "localhost", "0.0.0.0", "::1"}
 
@@ -95,6 +98,51 @@ def _url_hostports(text: str) -> set[str]:
     return out
 
 
+def _path_candidates(path: str) -> set[str]:
+    candidates = {path or "/"}
+    try:
+        candidates.add(unquote(path or "/"))
+    except Exception:
+        pass
+    for p in list(candidates):
+        try:
+            norm = posixpath.normpath(p)
+            if norm.startswith("//"):
+                norm = "/" + norm.lstrip("/")
+            candidates.add(norm)
+        except Exception:
+            pass
+    return candidates
+
+
+def _requested_paths(text: str) -> set[str]:
+    paths: set[str] = set()
+    for raw in _ANY_URL.findall(text):
+        try:
+            u = urlsplit(raw if "://" in raw else "http://" + raw)
+            paths.add(u.path or "/")
+        except Exception:
+            continue
+    for raw in _PATH_LITERAL.findall(text):
+        raw = raw.split("?", 1)[0].split("#", 1)[0]
+        try:
+            paths.add(unquote(raw))
+        except Exception:
+            paths.add(raw)
+    return paths
+
+
+def _denied_endpoint_hits(text: str, denied_paths: list) -> list[str]:
+    patterns = [str(p) for p in (denied_paths or [])]
+    if not patterns:
+        return []
+    hits = set()
+    for path in _requested_paths(text):
+        if any(fnmatchcase(c, pat) for c in _path_candidates(path) for pat in patterns):
+            hits.add(path)
+    return sorted(hits)
+
+
 def infra_only(cmd: str, script: str | None, policy: dict) -> bool:
     """strix自身のプロキシ等、sandboxインフラだけを対象にしたコマンドか。"""
     infra = {str(x).lower() for x in (policy.get("egress", {}).get("infra_hosts") or [])}
@@ -109,12 +157,21 @@ def check_exec_policy(cmd: str, script: str | None, policy: dict) -> list[Violat
     if sandbox_internal(cmd) or infra_only(cmd, script, policy):
         return []
     preset = policy.get("preset", "full")
-    if preset == "full":
-        return []
     text = cmd + "\n" + (script or "")
-    allowed = {m.upper() for m in (policy.get("http", {}).get("allowed_methods") or ["GET"])}
     violations: list[Violation] = []
 
+    denied = _denied_endpoint_hits(text, policy.get("http", {}).get("denied_paths") or [])
+    if denied:
+        violations.append(Violation(
+            "policy_denied_path",
+            ", ".join(denied),
+            f"[strix-guard] {preset} policy blocks access to denied endpoint(s): "
+            f"{', '.join(denied)}. Do not retry this request."))
+
+    if preset == "full":
+        return violations
+
+    allowed = {m.upper() for m in (policy.get("http", {}).get("allowed_methods") or ["GET"])}
     bad = sorted(m for m in detect_methods(text) if m not in allowed)
     if bad:
         violations.append(Violation(

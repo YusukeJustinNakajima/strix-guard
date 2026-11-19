@@ -2,23 +2,45 @@
 
 Runs inside the strix sandbox, listens on 127.0.0.1:48081, and chains to the
 existing in-container proxy (Caido, 127.0.0.1:48080). It enforces the run's
-allowed HTTP methods, host allowlist, request/rate/parallel caps, and writes a
-JSONL access log that the host mounts from the container.
+allowed HTTP methods, denied paths, host allowlist, request/rate/parallel caps,
+and writes a JSONL access log that the host mounts from the container.
 """
 import argparse
 import http.client
 import json
 import os
+import posixpath
 import select
 import socket
 import threading
 import time
+from fnmatch import fnmatchcase
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 HOP = {"connection", "proxy-connection", "keep-alive", "transfer-encoding",
        "te", "trailer", "upgrade", "content-length", "proxy-authorization"}
 IN_SCOPE = {"host.docker.internal", "127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
+def path_denied(path: str, patterns: list) -> bool:
+    if not patterns:
+        return False
+    path = (path or "/").split("?", 1)[0].split("#", 1)[0]
+    candidates = {path or "/"}
+    try:
+        candidates.add(unquote(path or "/"))
+    except Exception:
+        pass
+    for p in list(candidates):
+        try:
+            norm = posixpath.normpath(p)
+            if norm.startswith("//"):
+                norm = "/" + norm.lstrip("/")
+            candidates.add(norm)
+        except Exception:
+            pass
+    return any(fnmatchcase(c, pat) for pat in patterns for c in candidates)
 
 
 class Guard:
@@ -41,10 +63,14 @@ class Guard:
         except Exception:
             pass
 
-    def check(self, method: str, hostport: str, host: str, enforce_method: bool = True) -> tuple[bool, str]:
+    def check(self, method: str, hostport: str, host: str, path: str | None = None,
+              enforce_method: bool = True) -> tuple[bool, str]:
         infra = {str(x).lower() for x in (self.policy.get("infra_hosts") or [])}
         if hostport.lower() in infra or host.lower() in infra:
             return True, "infra"
+        denied = [str(p) for p in (self.policy.get("denied_paths") or [])]
+        if path and path_denied(path, denied):
+            return False, "path_denied"
         allowed_methods = {m.upper() for m in (self.policy.get("allowed_methods") or ["GET"])}
         if enforce_method and method.upper() not in allowed_methods:
             return False, "method_not_allowed"
@@ -108,7 +134,7 @@ class Handler(BaseHTTPRequestHandler):
             g.log({"method": method, "path": self.path, "verdict": "bad_request"})
             return self._respond(400, "strix-guard: proxy requires an absolute URL")
         u, host, hostport = parsed
-        ok, reason = g.check(method, hostport, host)
+        ok, reason = g.check(method, hostport, host, path=u.path)
         if not ok:
             g.log({"method": method, "host": hostport, "path": u.path,
                    "verdict": reason})

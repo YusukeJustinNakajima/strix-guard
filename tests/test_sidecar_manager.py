@@ -75,6 +75,16 @@ class TestSidecarManager(unittest.TestCase):
         self.assertEqual(policy["allowed_methods"], ["GET", "HEAD", "OPTIONS"])
         self.assertIn("host.docker.internal:5000", policy["allowed_hosts"])
 
+    def test_prepare_includes_denied_paths(self):
+        self.policy["http"]["denied_paths"] = ["/admin/*"]
+        sidecar = prepare(self.policy, ["http://host.docker.internal:5000"])
+        try:
+            with open(os.path.join(sidecar["app_dir"], "policy.json")) as f:
+                policy = json.load(f)
+            self.assertEqual(policy["denied_paths"], ["/admin/*"])
+        finally:
+            shutil.rmtree(sidecar["base"], ignore_errors=True)
+
     def test_full_preset_has_no_sidecar(self):
         self.assertIsNone(prepare(resolve_policy("full"), ["http://host.docker.internal:5000"]))
 

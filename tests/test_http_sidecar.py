@@ -99,6 +99,38 @@ class TestHttpSidecar(unittest.TestCase):
         self.assertIn("allow", verdicts)
         self.assertIn("method_not_allowed", verdicts)
 
+    def test_denied_path_blocked(self):
+        self.httpd.guard.policy["denied_paths"] = ["/admin/delete_account", "/admin/delete_account/*"]
+        status, data = self._req("GET", "http://example.test/admin/delete_account/31")
+        self.assertEqual(status, 403)
+        self.assertIn(b"path_denied", data)
+        self.assertNotIn(("GET", "http://example.test/admin/delete_account/31"), FakeUpstream.seen)
+
+    def test_denied_path_wildcard_and_query(self):
+        self.httpd.guard.policy["denied_paths"] = ["/internal/*"]
+        status, data = self._req("GET", "http://example.test/internal/diag?x=1")
+        self.assertEqual(status, 403)
+        self.assertIn(b"path_denied", data)
+
+    def test_denied_path_does_not_match_similar_path(self):
+        self.httpd.guard.policy["denied_paths"] = ["/admin/delete_account"]
+        status, data = self._req("GET", "http://example.test/admin/delete_accounts")
+        self.assertEqual(status, 200)
+        self.assertEqual(data, b"upstream-get")
+
+    def test_denied_path_matches_percent_encoded_path(self):
+        self.httpd.guard.policy["denied_paths"] = ["/admin/delete_account"]
+        status, data = self._req("GET", "http://example.test/%61dmin/delete_account")
+        self.assertEqual(status, 403)
+        self.assertIn(b"path_denied", data)
+
+    def test_denied_path_logs_verdict(self):
+        self.httpd.guard.policy["denied_paths"] = ["/admin/*"]
+        self._req("GET", "http://example.test/admin/x")
+        lines = [json.loads(l) for l in open(self.log)]
+        self.assertTrue(any(d.get("verdict") == "path_denied" and d.get("path") == "/admin/x"
+                            for d in lines))
+
     def test_request_cap(self):
         self.httpd.guard.policy["max_requests"] = 1
         self.assertEqual(self._req("GET", "http://example.test/1")[0], 200)

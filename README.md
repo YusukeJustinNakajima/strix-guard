@@ -149,6 +149,7 @@ It blocks or holds:
 - file uploads
 - SQL writes (`INSERT`, `UPDATE`, `DELETE FROM`, `DROP TABLE`, `TRUNCATE`, `ALTER TABLE`)
 - external egress when `egress.allow_external` is false
+- request paths matching `http.denied_paths` (also enforced by the HTTP sidecar)
 - exploitation tools in `recon`
 
 Strix's own proxy (`127.0.0.1:48080`) is in `egress.infra_hosts`. Commands that only touch that host are treated as infrastructure and are not subject to the target method policy.
@@ -199,6 +200,7 @@ For `reference_only` and `recon`, the guard starts `http_sidecar.py` inside each
 - receives the container's `http_proxy`, `https_proxy`, and `ALL_PROXY`
 - chains to Strix's Caido proxy at `127.0.0.1:48080`
 - allows only the configured HTTP methods and hosts
+- blocks request paths matching `http.denied_paths`
 - enforces `max_requests`, `max_rps`, and `max_parallel`
 - writes a JSONL access log to a host-mounted directory
 
@@ -465,6 +467,7 @@ Example `guard_policy.json`:
   "http": {
     "enforce": true,
     "allowed_methods": ["GET", "HEAD", "OPTIONS"],
+    "denied_paths": ["/admin/delete_account", "/admin/delete_account/*"],
     "max_requests": 500,
     "max_parallel": 10,
     "max_rps": 10,
@@ -492,6 +495,8 @@ Policy lookup order:
 3. `./guard_policy.json`
 4. `~/.config/strix-guard/policy.json`
 5. the selected preset
+
+`http.denied_paths` entries are shell-style glob patterns (`fnmatch`) and must start with `/`. The path is matched after percent-decoding and dot-segment normalization; the query string is not included. The exec gate checks absolute URLs and quoted path literals in the command and its reconstructed script, and the in-container HTTP sidecar enforces the actual request path. In `full`, the sidecar is off, so only the exec-gate check applies; set `http.enforce` to true if you need runtime enforcement for dynamically built URLs. CONNECT tunnels are not path-inspected; keep `allow_connect` false when you rely on this list.
 
 Unknown keys are rejected at startup. The resolved policy is written to `guard_runs/<run>/policy.json`.
 
@@ -636,7 +641,7 @@ guard_runs/run-20261101-145329/
 
 ## Tests
 
-The repository has 120 unit and integration tests:
+The repository has 132 unit and integration tests:
 
 ```bash
 python3 -m unittest discover -s tests

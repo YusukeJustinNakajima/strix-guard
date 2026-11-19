@@ -33,7 +33,7 @@
 | FR-16 | 裁定の失敗を記録する | モデル名、フォールバック有無、コスト、エラー内容を監査ログに残す。グレーゾーンの失敗時は ALLOW として実行を通し、通常 exec の失敗時は拒否とする |
 | FR-17 | ハードブロックを守る | `third_party_attack`、`out_of_scope`、`irreversible_destruction`、`dos_scale_load` は、裁定モデルが再審査してもダウングレード（緩和）しない |
 | FR-18 | コンテナ内 HTTP プロキシでメソッドを制御する | `reference_only` と `recon` では、コンテナ起動後に `http_sidecar.py` を起動し、`http_proxy` を `127.0.0.1:48081` へ向け、Caido（`127.0.0.1:48080`）へ多段中継する |
-| FR-19 | HTTP の許可条件を守る | 許可メソッド、許可ホスト、`max_requests`、`max_rps`、`max_parallel` を検査し、拒否したリクエストを JSONL に記録する |
+| FR-19 | HTTP の許可条件を守る | 許可メソッド、許可ホスト、`http.denied_paths`、`max_requests`、`max_rps`、`max_parallel` を検査し、拒否したリクエストを JSONL に記録する |
 | FR-20 | 実行時メソッドの迂回を止める | exec の静的検査では検知できない、実行時に動的生成された `POST` などを HTTP サイドカーで遮断する |
 | FR-21 | インフラ通信を分離する | `127.0.0.1:48080` など `egress.infra_hosts` の通信は、テスト対象へのメソッド制限から除外する。`NO_PROXY` には `localhost`、`127.0.0.1`、`api.caido.io` を設定する |
 | FR-22 | HTTPS の制限を明示する | `reference_only` の CONNECT は既定で拒否する。`allow_connect` を true に設定した場合のみトンネルを通し、内部メソッドを検査できない旨を記録する |
@@ -61,6 +61,7 @@
 | `preset` | `full` / `reference_only` / `recon` / `custom` |
 | `review_band` | 次元ごとのグレーゾーン下限（0〜1） |
 | `http.allowed_methods` | 許可する HTTP メソッド |
+| `http.denied_paths` | アクセスを拒否するパス（`/` 始まりの glob、exec ゲートとサイドカーで強制） |
 | `http.enforce` | コンテナ内 HTTP サイドカーを起動するか |
 | `http.max_requests` / `max_parallel` / `max_rps` | リクエスト数、並列数、毎秒の上限 |
 | `http.allow_uploads` | アップロードを許可するか |

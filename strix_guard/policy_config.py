@@ -9,8 +9,8 @@ from .policy import DEFAULT_POLICY
 DIMS = ("destructiveness", "load", "data_exposure", "scope_violation", "third_party")
 KNOWN_METHODS = {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "TRACE", "CONNECT"}
 TOP_KEYS = {"version", "preset", "description", "review_band", "http", "egress", "data", "thresholds"}
-HTTP_KEYS = {"enforce", "allowed_methods", "max_requests", "max_parallel", "max_rps",
-             "allow_uploads", "allow_connect"}
+HTTP_KEYS = {"enforce", "allowed_methods", "denied_paths", "max_requests", "max_parallel",
+             "max_rps", "allow_uploads", "allow_connect"}
 EGRESS_KEYS = {"allow_external", "allowed_hosts", "infra_hosts"}
 DATA_KEYS = {"allowed_test_accounts", "allow_other_accounts", "allow_writes", "restore_after_write"}
 
@@ -24,8 +24,8 @@ PRESETS = {
         "description": "Active testing with bounded load and reversible writes.",
         "review_band": dict(_BAND),
         "http": {"enforce": False, "allowed_methods": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
-                 "max_requests": 500, "max_parallel": 10, "max_rps": 10, "allow_uploads": True,
-                 "allow_connect": True},
+                 "denied_paths": [], "max_requests": 500, "max_parallel": 10, "max_rps": 10,
+                 "allow_uploads": True, "allow_connect": True},
         "egress": {"allow_external": True, "allowed_hosts": [],
                    "infra_hosts": ["127.0.0.1:48080", "localhost:48080"]},
         "data": {"allowed_test_accounts": [], "allow_other_accounts": True,
@@ -37,7 +37,7 @@ PRESETS = {
         "description": "Read-only assessment: only GET/HEAD/OPTIONS, no uploads or data writes.",
         "review_band": {d: 0.25 for d in DIMS},
         "http": {"enforce": True, "allowed_methods": list(_READ_METHODS),
-                 "max_requests": 500, "max_parallel": 10, "max_rps": 10,
+                 "denied_paths": [], "max_requests": 500, "max_parallel": 10, "max_rps": 10,
                  "allow_uploads": False, "allow_connect": False},
         "egress": {"allow_external": False, "allowed_hosts": [],
                    "infra_hosts": ["127.0.0.1:48080", "localhost:48080"]},
@@ -50,7 +50,7 @@ PRESETS = {
         "description": "Passive reconnaissance: low-rate GET/HEAD, no exploitation tools.",
         "review_band": {d: 0.25 for d in DIMS},
         "http": {"enforce": True, "allowed_methods": list(_READ_METHODS),
-                 "max_requests": 200, "max_parallel": 5, "max_rps": 5,
+                 "denied_paths": [], "max_requests": 200, "max_parallel": 5, "max_rps": 5,
                  "allow_uploads": False, "allow_connect": False},
         "egress": {"allow_external": False, "allowed_hosts": [],
                    "infra_hosts": ["127.0.0.1:48080", "localhost:48080"]},
@@ -98,6 +98,11 @@ def validate_policy(p: dict) -> dict:
             for m in h["allowed_methods"]:
                 _require(isinstance(m, str) and m.upper() in KNOWN_METHODS,
                          f"unknown HTTP method: {m}")
+        if "denied_paths" in h:
+            _require(isinstance(h["denied_paths"], list), "http.denied_paths must be a list")
+            for pat in h["denied_paths"]:
+                _require(isinstance(pat, str) and pat.startswith("/"),
+                         "http.denied_paths entries must be strings starting with '/'")
         for k in ("max_requests", "max_parallel", "max_rps"):
             if k in h:
                 _require(isinstance(h[k], int) and h[k] > 0, f"http.{k} must be a positive integer")
@@ -179,8 +184,9 @@ def policy_summary(policy: dict) -> dict:
     data = policy.get("data") or {}
     return {
         "preset": policy.get("preset"),
-        "http": {k: http.get(k) for k in ("allowed_methods", "max_requests", "max_parallel",
-                                          "max_rps", "allow_uploads", "allow_connect")},
+        "http": {k: http.get(k) for k in ("allowed_methods", "denied_paths", "max_requests",
+                                          "max_parallel", "max_rps", "allow_uploads",
+                                          "allow_connect")},
         "egress": {"allow_external": egress.get("allow_external"),
                    "allowed_hosts": egress.get("allowed_hosts") or [],
                    "infra_hosts": egress.get("infra_hosts") or []},

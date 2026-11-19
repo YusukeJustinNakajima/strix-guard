@@ -43,6 +43,18 @@ class TestPolicyConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_policy({"http": {"allowed_methods": ["FETCH"]}})
 
+    def test_denied_paths_accepted(self):
+        p = validate_policy({"http": {"denied_paths": ["/admin/*", "/internal"]}})
+        self.assertEqual(p["http"]["denied_paths"], ["/admin/*", "/internal"])
+
+    def test_denied_paths_must_be_paths(self):
+        with self.assertRaises(ValueError):
+            validate_policy({"http": {"denied_paths": ["admin/*"]}})
+        with self.assertRaises(ValueError):
+            validate_policy({"http": {"denied_paths": [1]}})
+        with self.assertRaises(ValueError):
+            validate_policy({"http": {"denied_paths": "/admin/*"}})
+
     def test_missing_file_raises(self):
         with self.assertRaises(FileNotFoundError):
             resolve_policy("full", "/nonexistent/policy.json")
@@ -63,9 +75,11 @@ class TestPolicyConfig(unittest.TestCase):
     def test_summary_omits_accounts(self):
         p = resolve_policy("full")
         p["data"]["allowed_test_accounts"] = ["secret-user"]
+        p["http"]["denied_paths"] = ["/admin/*"]
         s = json.dumps(policy_summary(p))
         self.assertNotIn("secret-user", s)
         self.assertIn("allowed_methods", s)
+        self.assertIn("/admin/*", s)
 
     def test_snapshot(self):
         p = resolve_policy("reference_only")

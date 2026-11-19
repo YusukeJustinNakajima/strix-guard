@@ -10,7 +10,7 @@ An independent target environment was prepared (`httpd:2.4-alpine` on port 8081 
 
 ### 0.1 Automated tests
 
-- Unit/integration: all 120 tests pass (Python 3.14.4 / Docker 29.8.0).
+- Unit/integration: all 132 tests pass (Python 3.14.4 / Docker 29.8.0).
 - `tools/verify_gate.py`: all five checks PASS.
 
 ### 0.2 Direct gate verification (`tools/retest_driver2.py`, 30/30 PASS)
@@ -66,7 +66,7 @@ cd strix_guard
 python3 -m unittest discover -s tests
 ```
 
-Final run: all 120 tests pass (Python 3.14.4, Linux, Docker 29.8.0).
+Final run: all 132 tests pass (Python 3.14.4, Linux, Docker 29.8.0).
 
 The E2E runs used the local vulnerable test app `http://host.docker.internal:5000`. Guard audits are under `guard_runs/` and Strix run results under `strix_runs/`.
 

@@ -10,7 +10,7 @@
 
 ### 0.1 自動テスト
 
-- ユニット/統合: 120 件すべて成功（Python 3.14.4 / Docker 29.8.0）。
+- ユニット/統合: 132 件すべて成功（Python 3.14.4 / Docker 29.8.0）。
 - `tools/verify_gate.py`: 5 項目すべて PASS。
 
 ### 0.2 直接ゲート検証（`tools/retest_driver2.py`、30/30 PASS）
@@ -67,7 +67,7 @@ cd strix_guard
 python3 -m unittest discover -s tests
 ```
 
-最終実行: 120 件すべて成功（Python 3.14.4、Linux、Docker 29.8.0）。
+最終実行: 132 件すべて成功（Python 3.14.4、Linux、Docker 29.8.0）。
 
 E2E は、ローカルの脆弱性検証アプリ `http://host.docker.internal:5000` に対して実行しました。ガードの監査は `guard_runs/`、Strix の実行結果は `strix_runs/` に残しています。
 
