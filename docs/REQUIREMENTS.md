@@ -61,7 +61,7 @@
 | `preset` | `full` / `reference_only` / `recon` / `custom` |
 | `review_band` | 次元ごとのグレーゾーン下限（0〜1） |
 | `http.allowed_methods` | 許可する HTTP メソッド |
-| `http.denied_paths` | アクセスを拒否するパス（`/` 始まりの glob、exec ゲートとサイドカーで強制） |
+| `http.denied_paths` | アクセスを拒否するパス（`/` 始まりの glob、exec ゲートとサイドカーで強制。`--deny-path` / `--deny-paths-file` でも追加可能） |
 | `http.enforce` | コンテナ内 HTTP サイドカーを起動するか |
 | `http.max_requests` / `max_parallel` / `max_rps` | リクエスト数、並列数、毎秒の上限 |
 | `http.allow_uploads` | アップロードを許可するか |

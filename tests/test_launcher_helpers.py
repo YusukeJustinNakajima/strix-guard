@@ -1,6 +1,9 @@
+import os
+import tempfile
 import unittest
 
-from strix_guard.launcher import _family, _inner_command, _parallel_of
+from strix_guard.launcher import (_family, _inner_command, _load_denied_paths,
+                                  _merge_denied_paths, _parallel_of)
 
 
 class TestFamily(unittest.TestCase):
@@ -33,6 +36,30 @@ class TestFamily(unittest.TestCase):
         wrapped = ('sh -lc mkdir -p "$1" && printf x > "$2" && shift 2 && exec "$@" '
                    'sh /tmp/sandbox-docker-archive /tmp/a.pid ' + direct)
         self.assertEqual(_inner_command(wrapped), "ffuf -u http://x/FUZZ -t 50")
+
+    def test_load_denied_paths_from_args(self):
+        self.assertEqual(
+            _load_denied_paths([" /admin/* ", "/admin/*", "/internal"], None),
+            ["/admin/*", "/internal"])
+
+    def test_load_denied_paths_from_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "deny.txt")
+            with open(path, "w", encoding="utf-8-sig") as f:
+                f.write("# comment\n\n/admin/*\n  /internal  \n")
+            self.assertEqual(
+                _load_denied_paths(["/admin/*"], path),
+                ["/admin/*", "/internal"])
+
+    def test_load_denied_paths_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            _load_denied_paths([], "/nonexistent/deny.txt")
+
+    def test_merge_denied_paths(self):
+        policy = {"http": {"denied_paths": ["/admin/*"]}}
+        self.assertEqual(
+            _merge_denied_paths(policy, ["/admin/*", "/internal"]),
+            ["/admin/*", "/internal"])
 
 
 if __name__ == "__main__":

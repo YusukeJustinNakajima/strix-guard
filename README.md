@@ -360,6 +360,8 @@ Run `python3 -m strix_guard.launcher --help` for the same list. Strix's own flag
 | Run | `--dry-run` | off | Start the Docker proxy and policy pipeline without launching Strix |
 | Policy | `--policy-preset NAME` | `full` | Testing stance: `full`, `reference_only`, or `recon` (see [Policy presets](#policy-presets)) |
 | Policy | `--policy FILE` | none | JSON policy file; overrides the preset (highest priority) |
+| Policy | `--deny-path PATH` | none | Endpoint path to block; repeat for multiple paths (glob patterns allowed) |
+| Policy | `--deny-paths-file FILE` | none | File with one denied endpoint path per line (`#` comments allowed) |
 | Policy | `--no-http-enforce` | off | Keep the exec rules but do not start the in-container HTTP sidecar |
 | Policy | `--environment NAME` | `benchmark` | Environment profile for PII defaults and threshold scaling |
 | Policy | `--pii-policy NAME` | `test_data_ok` | `test_data_ok` caps test-account data risk; `strict` keeps full PII risk |
@@ -499,6 +501,26 @@ Policy lookup order:
 `http.denied_paths` entries are shell-style glob patterns (`fnmatch`) and must start with `/`. The path is matched after percent-decoding and dot-segment normalization; the query string is not included. The exec gate checks absolute URLs and quoted path literals in the command and its reconstructed script, and the in-container HTTP sidecar enforces the actual request path. In `full`, the sidecar is off, so only the exec-gate check applies; set `http.enforce` to true if you need runtime enforcement for dynamically built URLs. CONNECT tunnels are not path-inspected; keep `allow_connect` false when you rely on this list.
 
 Unknown keys are rejected at startup. The resolved policy is written to `guard_runs/<run>/policy.json`.
+
+### Denied endpoints
+
+`http.denied_paths` can also be supplied without editing the policy file. Repeat `--deny-path`, or point `--deny-paths-file` at a newline-separated list:
+
+```bash
+python3 -m strix_guard.launcher \
+  --deny-path '/admin/delete_account' \
+  --deny-path '/admin/delete_account/*' \
+  -- --target http://host.docker.internal:5000 --non-interactive
+
+# denied_paths.txt:
+# /admin/delete_account
+# /internal/*
+python3 -m strix_guard.launcher \
+  --deny-paths-file ./denied_paths.txt \
+  -- --target http://host.docker.internal:5000 --non-interactive
+```
+
+CLI and file entries are added to any `http.denied_paths` already in the policy file, and duplicates are removed.
 
 ### Gray-zone review
 
@@ -641,7 +663,7 @@ guard_runs/run-20261101-145329/
 
 ## Tests
 
-The repository has 132 unit and integration tests:
+The repository has 136 unit and integration tests:
 
 ```bash
 python3 -m unittest discover -s tests

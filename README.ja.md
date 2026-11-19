@@ -360,6 +360,8 @@ python3 -m strix_guard.replay --help
 | 実行 | `--dry-run` | off | Strix を起動せず、Docker プロキシとポリシー判定だけを動かす |
 | ポリシー | `--policy-preset NAME` | `full` | テスト方針: `full` / `reference_only` / `recon`（[ポリシープリセット](#ポリシープリセット)） |
 | ポリシー | `--policy FILE` | なし | JSON ポリシーファイル。プリセットを上書き（最優先） |
+| ポリシー | `--deny-path PATH` | なし | 遮断するエンドポイントパス。複数指定する場合は繰り返す（glob 可） |
+| ポリシー | `--deny-paths-file FILE` | なし | 遮断するパスを1行1件で記載したファイル（`#` コメント可） |
 | ポリシー | `--no-http-enforce` | off | exec のルールは維持し、コンテナ内 HTTP サイドカーは起動しない |
 | ポリシー | `--environment NAME` | `benchmark` | PII 既定値としきい値倍率を決める環境プロファイル |
 | ポリシー | `--pii-policy NAME` | `test_data_ok` | `test_data_ok` はテストアカウントのデータ露出リスクを抑制、`strict` は通常の PII 評価 |
@@ -499,6 +501,26 @@ python3 -m strix_guard.launcher \
 `http.denied_paths` は `/` で始まるシェル風の glob パターン（`fnmatch`）で指定します。マッチ時はパーセントデコードとドットセグメントの正規化を行い、クエリ文字列は含めません。exec ゲートはコマンドと復元したスクリプト内の絶対 URL とクォートされたパス文字列を、コンテナ内 HTTP サイドカーは実際のリクエストパスを検査します。`full` ではサイドカーが起動しないため、exec ゲートの検査だけが適用されます。動的に組み立てた URL も実行時に強制したい場合は `http.enforce` を true にしてください。CONNECT トンネル内部はパス検査できないため、このリストに依存する場合は `allow_connect` を false にしてください。
 
 未定義のキーが含まれていると、起動時にエラーになります。解決後のポリシーは `guard_runs/<run>/policy.json` に保存します。
+
+### 拒否エンドポイント
+
+`http.denied_paths` はポリシーファイルを編集せずに指定することもできます。`--deny-path` を繰り返すか、`--deny-paths-file` に1行1件のリストを渡します。
+
+```bash
+python3 -m strix_guard.launcher \
+  --deny-path '/admin/delete_account' \
+  --deny-path '/admin/delete_account/*' \
+  -- --target http://host.docker.internal:5000 --non-interactive
+
+# denied_paths.txt:
+# /admin/delete_account
+# /internal/*
+python3 -m strix_guard.launcher \
+  --deny-paths-file ./denied_paths.txt \
+  -- --target http://host.docker.internal:5000 --non-interactive
+```
+
+CLI とファイルの指定は、ポリシーファイルの `http.denied_paths` に追加され、重複は除去されます。
 
 ### グレーゾーン再審査
 
@@ -641,7 +663,7 @@ guard_runs/run-20261101-145329/
 
 ## テスト
 
-ユニットテストおよび統合テスト（計132件）を用意しています。
+ユニットテストおよび統合テスト（計136件）を用意しています。
 
 ```bash
 python3 -m unittest discover -s tests

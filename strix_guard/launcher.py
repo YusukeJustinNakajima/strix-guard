@@ -23,7 +23,8 @@ from .decision import DecisionService
 from .docker_proxy import DockerProxy
 from .ui import CliApproval, NonInteractivePolicy, TuxPopupApproval, WebApproval
 from .policy import ui_label
-from .policy_config import policy_summary, resolve_policy, review_band_hits, write_snapshot
+from .policy_config import (policy_summary, resolve_policy, review_band_hits,
+                            validate_policy, write_snapshot)
 from .policy_guard import check_exec_policy, infra_only
 from .sidecar_manager import make_hooks as make_sidecar_hooks, prepare as prepare_sidecar
 
@@ -126,6 +127,30 @@ def _parallel_of(cmd: str) -> int | None:
     return best
 
 
+def _load_denied_paths(paths: list[str] | None, file_path: str | None) -> list[str]:
+    """CLIの--deny-pathと--deny-paths-fileから拒否パスを集める。"""
+    values = [p.strip() for p in (paths or []) if p and p.strip()]
+    if file_path:
+        with open(file_path, encoding="utf-8-sig") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    values.append(line)
+    out: list[str] = []
+    for p in values:
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def _merge_denied_paths(policy: dict, extra: list[str]) -> list[str]:
+    merged = list(policy.get("http", {}).get("denied_paths") or [])
+    for p in extra:
+        if p not in merged:
+            merged.append(p)
+    return merged
+
+
 class LedgerCache:
     """runディレクトリの agents.db から path->content 台帳を遅延構築（mtimeで更新）"""
 
@@ -215,6 +240,11 @@ Arguments after '--' are passed to Strix unchanged, for example:
                        help="testing stance preset (default: full; see presets below)")
     g_pol.add_argument("--policy", default=None,
                        help="JSON policy file that overrides the preset (highest priority)")
+    g_pol.add_argument("--deny-path", action="append", default=[], metavar="PATH",
+                       help="endpoint path to block; repeat for multiple paths "
+                            "(glob patterns allowed)")
+    g_pol.add_argument("--deny-paths-file", default=None, metavar="FILE",
+                       help="file with one endpoint path per line (# comments allowed)")
     g_pol.add_argument("--no-http-enforce", action="store_true",
                        help="do not start the in-container HTTP sidecar even if the policy enables it")
     g_pol.add_argument("--environment",
@@ -329,6 +359,10 @@ Arguments after '--' are passed to Strix unchanged, for example:
     policy_path = args.policy or setup_policy_file
     try:
         guard_policy = resolve_policy(preset=preset, path=policy_path)
+        deny_paths = _load_denied_paths(args.deny_path, args.deny_paths_file)
+        if deny_paths:
+            guard_policy["http"]["denied_paths"] = _merge_denied_paths(guard_policy, deny_paths)
+        validate_policy(guard_policy)
     except (ValueError, FileNotFoundError, OSError) as e:
         print(f"[strix-guard] policy error: {e}", flush=True)
         return 2
